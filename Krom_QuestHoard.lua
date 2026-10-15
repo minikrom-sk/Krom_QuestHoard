@@ -251,7 +251,9 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
   elseif event == "PLAYER_LOGIN" then
     if Krom_QuestHoardDB.shown then frame:Show() end
-    say("online. /qh to toggle the list.")
+    local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+    local ver = getMeta and getMeta(ADDON, "Version") or "?"
+    say(("online (%s). /qh to toggle the list."):format(ver))
     refresh()
   else
     refresh()
