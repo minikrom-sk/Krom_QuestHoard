@@ -381,7 +381,7 @@ local MAX_PER_SECTION = 8
 -- ---------------------------------------------------------------------------
 -- Zone picker: watch another zone's drops (e.g. plan Westfall from Northshire)
 -- ---------------------------------------------------------------------------
-local render -- defined below
+local render, refresh -- defined below (forward-declared so the zone picker can call them)
 local zoneBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 zoneBtn:SetSize(290, 20)
 zoneBtn:SetPoint("TOPLEFT", 10, -26)
@@ -544,6 +544,10 @@ function render()
   section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     return ("%s  |cff999999%s (lvl %d)|r"):format(e.name, e.quest[Q_NAME], e.quest[Q_LEVEL])
   end)
+  if picked and #watch == 0 then
+    add(("|cffffd100Watch for in %s|r"):format(picked), i > 0)
+    add("   |cff999999Nothing sellable to keep for quests there.|r")
+  end
 
   -- 4. Quests done: sell it
   section("Done with - sell", sellList, function(e)
@@ -619,7 +623,7 @@ end
 -- ---------------------------------------------------------------------------
 local pending = false
 local lastError
-local function refresh()
+function refresh()
   if pending then return end
   pending = true
   C_Timer.After(0.3, function()
