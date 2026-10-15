@@ -378,6 +378,97 @@ end
 
 local MAX_PER_SECTION = 8
 
+-- ---------------------------------------------------------------------------
+-- Zone picker: watch another zone's drops (e.g. plan Westfall from Northshire)
+-- ---------------------------------------------------------------------------
+local render -- defined below
+local zoneBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+zoneBtn:SetSize(290, 20)
+zoneBtn:SetPoint("TOPLEFT", 10, -26)
+
+local picker = CreateFrame("Frame", nil, frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
+picker:SetFrameStrata("DIALOG")
+picker:SetBackdrop({
+  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  tile = true, tileSize = 16, edgeSize = 16,
+  insets = { left = 4, right = 4, top = 4, bottom = 4 },
+})
+picker:SetBackdropColor(0, 0, 0, 0.95)
+picker:Hide()
+frame:HookScript("OnHide", function() picker:Hide() end)
+
+local zoneChoices
+local function getZoneChoices()
+  if zoneChoices then return zoneChoices end
+  zoneChoices = {}
+  for z, list in pairs(zoneIndex) do
+    if z ~= "Other" then
+      local lo, hi
+      for _, pr in ipairs(list) do
+        local q = pr[2]
+        if fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit) and (q[Q_SKILL] or 0) == 0 then
+          local l = q[Q_LEVEL] or 0
+          lo = math.min(lo or l, l); hi = math.max(hi or l, l)
+        end
+      end
+      if lo then zoneChoices[#zoneChoices + 1] = { name = z, lo = lo, hi = hi } end
+    end
+  end
+  table.sort(zoneChoices, function(a, b)
+    if a.lo ~= b.lo then return a.lo < b.lo end
+    return a.name < b.name
+  end)
+  return zoneChoices
+end
+
+local pickerButtons = {}
+local function pickZone(name)
+  Krom_QuestHoardDB.watchZone = name
+  picker:Hide()
+  refresh()
+end
+
+local COL_W, ROW_H, MAX_ROWS = 175, 16, 22
+local function showPicker()
+  local entries = { { label = "|cffffd100Current zone (auto)|r" } }
+  for _, z in ipairs(getZoneChoices()) do
+    local lv = z.lo == z.hi and tostring(z.lo) or (z.lo .. "-" .. z.hi)
+    entries[#entries + 1] = { name = z.name, label = ("%s |cff999999(%s)|r"):format(z.name, lv) }
+  end
+  local cols = math.ceil(#entries / MAX_ROWS)
+  local rows = math.ceil(#entries / cols)
+  for n, e in ipairs(entries) do
+    local b = pickerButtons[n]
+    if not b then
+      b = CreateFrame("Button", nil, picker)
+      b:SetSize(COL_W - 5, ROW_H)
+      local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      fs:SetPoint("LEFT", 4, 0)
+      fs:SetJustifyH("LEFT")
+      b:SetFontString(fs)
+      local hl = b:CreateTexture(nil, "HIGHLIGHT")
+      hl:SetAllPoints()
+      hl:SetColorTexture(1, 1, 1, 0.15)
+      pickerButtons[n] = b
+    end
+    local col, row = math.floor((n - 1) / rows), (n - 1) % rows
+    b:ClearAllPoints()
+    b:SetPoint("TOPLEFT", 8 + col * COL_W, -8 - row * ROW_H)
+    b:SetText(e.label)
+    b:SetScript("OnClick", function() pickZone(e.name) end)
+    b:Show()
+  end
+  for n = #entries + 1, #pickerButtons do pickerButtons[n]:Hide() end
+  picker:SetSize(cols * COL_W + 16, rows * ROW_H + 16)
+  picker:ClearAllPoints()
+  picker:SetPoint("TOPLEFT", zoneBtn, "BOTTOMLEFT", 0, -2)
+  picker:Show()
+end
+zoneBtn:SetScript("OnClick", function()
+  if picker:IsShown() then picker:Hide() else showPicker() end
+end)
+
 local function currentZones()
   local z = {}
   if GetRealZoneText then z[GetRealZoneText() or ""] = true end
@@ -386,8 +477,18 @@ local function currentZones()
   return z
 end
 
-local function render()
-  local i, y = 0, -28
+function render()
+  local watching = opt("showWatch", true)
+  local picked = watching and Krom_QuestHoardDB and Krom_QuestHoardDB.watchZone or nil
+  if watching then
+    local label = picked and ("Watching: %s  |cff999999(click to change)|r"):format(picked)
+                          or "Watching: current zone  |cff999999(click to change)|r"
+    zoneBtn:SetText(label)
+    zoneBtn:Show()
+  else
+    zoneBtn:Hide(); picker:Hide()
+  end
+  local i, y = 0, watching and -50 or -28
   local function add(text, gap)
     if gap then y = y - 4 end
     i = i + 1
@@ -425,11 +526,12 @@ local function render()
   -- (skips profession quests and anything way above your level)
   local myLevel = UnitLevel and UnitLevel("player") or 60
   local watch, seen = {}, {}
-  for z in pairs(opt("showWatch", true) and currentZones() or {}) do
+  local zones = not watching and {} or picked and { [picked] = true } or currentZones()
+  for z in pairs(zones) do
     for _, pair in ipairs(zoneIndex[z] or {}) do
       local iid, q = pair[1], pair[2]
       if not seen[iid] and not lastBags[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
-         and (q[Q_SKILL] or 0) == 0 and (q[Q_REQLEVEL] or 0) <= myLevel + 3
+         and (q[Q_SKILL] or 0) == 0 and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3)
          and questState(q[Q_ID]) == "todo" then
         if sellable(iid) then
           seen[iid] = true
@@ -439,7 +541,7 @@ local function render()
     end
   end
   table.sort(watch, function(a, b) return a.quest[Q_LEVEL] < b.quest[Q_LEVEL] end)
-  section("Watch for (this zone)", watch, function(e)
+  section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     return ("%s  |cff999999%s (lvl %d)|r"):format(e.name, e.quest[Q_NAME], e.quest[Q_LEVEL])
   end)
 

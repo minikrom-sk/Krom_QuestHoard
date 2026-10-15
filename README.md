@@ -7,7 +7,7 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - **Tooltips:** "KEEP Westfall Stew 2/3", "KEEP for <quest> (zone, level)", or
   "quests done - AH it (~1g 20s)" / "vendor it"
 - **Popup (`/qh`):** your quest-log items, bag items to keep for later quests,
-  drops to watch for in your current zone, and finished items to sell
+  drops to watch for in your current zone (or any zone you pick), and finished items to sell
 - **Chat pings** when you loot something worth keeping
 - **Auctionator (optional):** if installed, its scan prices drive the AH-vs-vendor verdict
 - **Minimap button:** left-click toggles the window, right-click opens options
