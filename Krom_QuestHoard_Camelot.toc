@@ -1,8 +1,10 @@
 ## Interface: 16001
 ## Title: Krom QuestHoard
-## Notes: Tracks quest items you need. Tells you what to KEEP.
+## Notes: Flags tradeable quest items so you don't vendor them, then tells you AH or vendor once the quests are done.
 ## Author: Krom & Co.
 ## Version: @project-version@
 ## SavedVariables: Krom_QuestHoardDB
+## OptionalDeps: Auctionator
 
+Data.lua
 Krom_QuestHoard.lua

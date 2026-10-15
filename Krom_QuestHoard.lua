@@ -1,21 +1,133 @@
--- Krom QuestHoard v0.1.2
--- Tracks items your current quests need: popup list, tooltip tags, loot pings.
--- Works on Classic Era (legacy quest API) and modern clients like Forever (C_QuestLog).
+-- Krom QuestHoard
+-- Flags TRADEABLE quest items (the ones you might vendor by accident) so you keep
+-- them until their quests are done, then tells you whether to AH or vendor them.
+-- Soulbound/quest-class items are ignored on purpose: you can't sell those anyway.
+--
+-- Data: ns.items (Data.lua, generated from QuestieDB's Forever data) plus anything
+-- the addon learns from your quest log. Works on Classic Era and modern clients.
 
-local ADDON = ...
+local ADDON, ns = ...
+ns.items = ns.items or {}
 
 local PREFIX = "|cffffb000Krom QuestHoard:|r "
 local function say(msg) print(PREFIX .. msg) end
 
--- ---------------------------------------------------------------------------
--- Data
--- ---------------------------------------------------------------------------
-local byItem = {}      -- lowercase item name -> { entry, entry, ... }
-local order = {}       -- entries in quest-log order (for the popup)
-local lastHave = {}    -- "quest\0item" -> count seen last scan
-local primed = false   -- skip loot pings on the very first scan
+-- Data row layout: ns.items[itemID] = { name, { {questID, questName, level, zone, raceMask, classMask, requiredLevel, skillID}, ... } }
+local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL = 1, 2, 3, 4, 5, 6, 7, 8
 
--- Pull "Tough Wolf Meat", 3, 8 out of "Tough Wolf Meat: 3/8" or "3/8 Tough Wolf Meat"
+-- ---------------------------------------------------------------------------
+-- API shims (Classic Era uses older globals, modern clients use C_ namespaces)
+-- ---------------------------------------------------------------------------
+local GetInfo = (C_Item and C_Item.GetItemInfo) or GetItemInfo
+local function itemInfo(id)
+  -- name, link, sellPrice, bindType  (bindType 1 = soulbound on pickup, 4 = quest)
+  local ok, name, link, _, _, _, _, _, _, _, _, sellPrice, _, _, bindType = pcall(GetInfo, id)
+  if ok then return name, link, sellPrice, bindType end
+end
+
+local function isBound(bindType) return bindType == 1 or bindType == 4 end
+
+local function isDone(questID)
+  if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+    return C_QuestLog.IsQuestFlaggedCompleted(questID) and true or false
+  elseif IsQuestFlaggedCompleted then
+    return IsQuestFlaggedCompleted(questID) and true or false
+  end
+  return false
+end
+
+local NumSlots = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
+local SlotItemID = (C_Container and C_Container.GetContainerItemID) or GetContainerItemID
+local function slotCount(bag, slot)
+  if C_Container and C_Container.GetContainerItemInfo then
+    local info = C_Container.GetContainerItemInfo(bag, slot)
+    return info and info.stackCount or 1
+  elseif GetContainerItemInfo then
+    local _, n = GetContainerItemInfo(bag, slot)
+    return n or 1
+  end
+  return 1
+end
+
+local function bagCounts()
+  local counts = {}
+  if not (NumSlots and SlotItemID) then return counts end
+  for bag = 0, (NUM_BAG_SLOTS or 4) do
+    for slot = 1, (NumSlots(bag) or 0) do
+      local id = SlotItemID(bag, slot)
+      if id then counts[id] = (counts[id] or 0) + slotCount(bag, slot) end
+    end
+  end
+  return counts
+end
+
+local function money(copper)
+  copper = math.floor((copper or 0) + 0.5)
+  if GetCoinTextureString then
+    local ok, s = pcall(GetCoinTextureString, copper)
+    if ok and s then return s end
+  end
+  return ("%dg %ds %dc"):format(copper / 10000, (copper / 100) % 100, copper % 100)
+end
+
+-- Auctionator is optional. If it's installed and has scan data, we use it.
+local function ahPrice(itemID)
+  local api = Auctionator and Auctionator.API and Auctionator.API.v1
+  if api and api.GetAuctionPriceByItemID then
+    local ok, p = pcall(api.GetAuctionPriceByItemID, ADDON, itemID)
+    if ok and type(p) == "number" and p > 0 then return p end
+  end
+end
+
+local AH_CUT = 0.95 -- the AH keeps 5% of the sale
+
+-- "ah" if the AH beats the vendor after the AH cut, "vendor" otherwise.
+local function verdict(itemID)
+  local _, _, sell = itemInfo(itemID)
+  sell = sell or 0
+  local ah = ahPrice(itemID)
+  if ah and ah * AH_CUT > sell then return "ah", ah, sell end
+  return "vendor", ah, sell
+end
+
+-- ---------------------------------------------------------------------------
+-- Who am I (race/class filters for quests)
+-- ---------------------------------------------------------------------------
+local raceBit, classBit
+local function setPlayerBits()
+  local _, _, raceID = UnitRace("player")
+  local _, _, classID = UnitClass("player")
+  raceBit = (raceID and raceID >= 1 and raceID <= 32) and 2 ^ (raceID - 1) or nil
+  classBit = (classID and classID >= 1 and classID <= 32) and 2 ^ (classID - 1) or nil
+end
+local function fits(mask, b)
+  if not mask or mask == 0 or not b or not bit then return true end
+  return bit.band(mask, b) ~= 0
+end
+
+-- ---------------------------------------------------------------------------
+-- Indexes built once at load
+-- ---------------------------------------------------------------------------
+local nameIndex = {}   -- lowercase item name -> itemID
+local zoneIndex = {}   -- zone name -> { {itemID, questRow}, ... }
+local function buildIndexes()
+  for iid, row in pairs(ns.items) do
+    nameIndex[row[1]:lower()] = iid
+    for _, q in ipairs(row[2]) do
+      local z = q[Q_ZONE]
+      zoneIndex[z] = zoneIndex[z] or {}
+      table.insert(zoneIndex[z], { iid, q })
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Quest log scan
+-- ---------------------------------------------------------------------------
+local active = {}        -- questID -> true for quests in your log
+local progress = {}      -- "questID:itemname" -> {have, need}
+local activeItems = {}   -- ordered list of tradeable item objectives in your log
+
 local function parseObjective(text)
   if type(text) ~= "string" then return end
   text = text:gsub("%s*%(Complete%)%s*$", "")
@@ -25,19 +137,14 @@ local function parseObjective(text)
   if name then return name, tonumber(have), tonumber(need) end
 end
 
--- Walk the quest log, newer API first, legacy fallback.
 local function forEachQuest(cb)
   if C_QuestLog and C_QuestLog.GetInfo and C_QuestLog.GetNumQuestLogEntries then
-    local n = C_QuestLog.GetNumQuestLogEntries() or 0
-    for i = 1, n do
+    for i = 1, (C_QuestLog.GetNumQuestLogEntries() or 0) do
       local info = C_QuestLog.GetInfo(i)
-      if info and not info.isHeader and info.title then
-        cb(info.title, info.questID, i)
-      end
+      if info and not info.isHeader and info.title then cb(info.title, info.questID, i) end
     end
   elseif GetNumQuestLogEntries and GetQuestLogTitle then
-    local n = GetNumQuestLogEntries() or 0
-    for i = 1, n do
+    for i = 1, (GetNumQuestLogEntries() or 0) do
       local title, _, _, isHeader, _, _, _, questID = GetQuestLogTitle(i)
       if title and not isHeader then cb(title, questID, i) end
     end
@@ -65,45 +172,132 @@ local function getObjectives(questID, index)
   return out
 end
 
+local function learn(lname, name, questID, title)
+  local db = Krom_QuestHoardDB
+  if not (db and questID) then return end
+  db.learned = db.learned or {}
+  local e = db.learned[lname] or { name = name, quests = {} }
+  e.quests[questID] = title
+  db.learned[lname] = e
+end
+
 local function scan()
-  wipe(byItem); wipe(order)
+  wipe(active); wipe(progress); wipe(activeItems)
   forEachQuest(function(title, questID, index)
+    if questID then active[questID] = true end
     for _, o in ipairs(getObjectives(questID, index)) do
       if o.type == "item" then
         local name, have, need = parseObjective(o.text)
         have = tonumber(o.have) or have or 0
         need = tonumber(o.need) or need
         if name and need and need > 0 then
-          local e = { name = name, have = have, need = need, quest = title,
-                      done = o.finished or have >= need }
-          local key = name:lower()
-          byItem[key] = byItem[key] or {}
-          table.insert(byItem[key], e)
-          order[#order + 1] = e
+          local lname = name:lower()
+          progress[(questID or 0) .. ":" .. lname] = { have = have, need = need }
+          local learnedEntry = Krom_QuestHoardDB and Krom_QuestHoardDB.learned and Krom_QuestHoardDB.learned[lname]
+          if not nameIndex[lname] and not (learnedEntry and learnedEntry.tradeable == false) then
+            learn(lname, name, questID, title)
+          end
+          local tradeable = nameIndex[lname] or (learnedEntry and learnedEntry.tradeable)
+          if tradeable then
+            activeItems[#activeItems + 1] = { name = name, have = have, need = need, quest = title,
+                                              done = o.finished or have >= need }
+          end
         end
       end
     end
   end)
 end
 
--- Ping in chat when a tracked count goes up.
-local function checkPings()
+-- Quests (for this character) that want an item: from data, then learned.
+local function questsFor(itemID, lname)
+  local list = {}
+  local row = itemID and ns.items[itemID]
+  if row then
+    for _, q in ipairs(row[2]) do
+      if fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit) then list[#list + 1] = q end
+    end
+    return list
+  end
+  local learned = lname and Krom_QuestHoardDB and Krom_QuestHoardDB.learned and Krom_QuestHoardDB.learned[lname]
+  if learned and learned.tradeable ~= false then
+    for qid, title in pairs(learned.quests) do list[#list + 1] = { qid, title, 0, "learned", 0, 0, 0, 0 } end
+  end
+  return list
+end
+
+local function questState(questID)
+  if active[questID] then return "active" end
+  if isDone(questID) then return "done" end
+  return "todo"
+end
+
+-- Quests that still need the item, active ones first. Empty when all are done.
+local function openQuests(qs)
+  local act, todo = {}, {}
+  for _, q in ipairs(qs) do
+    local st = questState(q[Q_ID])
+    if st == "active" then act[#act + 1] = q elseif st == "todo" then todo[#todo + 1] = q end
+  end
+  for _, q in ipairs(todo) do act[#act + 1] = q end
+  return act
+end
+
+-- ---------------------------------------------------------------------------
+-- Bag tracking + loot pings
+-- ---------------------------------------------------------------------------
+local lastBags = {}
+local primed = false
+local keepList, sellList = {}, {}
+
+local function scanBags()
+  wipe(keepList); wipe(sellList)
+  local bags = bagCounts()
+  for iid, count in pairs(bags) do
+    local name, _, _, bind = itemInfo(iid)
+    local lname = type(name) == "string" and name:lower() or nil
+    -- Learned items: settle whether they're tradeable once we actually hold one.
+    local learned = lname and Krom_QuestHoardDB and Krom_QuestHoardDB.learned and Krom_QuestHoardDB.learned[lname]
+    if learned and bind ~= nil and learned.tradeable == nil then learned.tradeable = not isBound(bind) end
+
+    if not isBound(bind) then
+      local qs = questsFor(iid, lname)
+      if #qs > 0 then
+        local open = openQuests(qs)
+        local display = (ns.items[iid] and ns.items[iid][1]) or name or ("item " .. iid)
+        -- Items for quests in your log already show in the quest-log section;
+        -- this list is for the ones you're holding for LATER quests.
+        local later
+        for _, q in ipairs(open) do if not active[q[Q_ID]] then later = q; break end end
+        if later then
+          keepList[#keepList + 1] = { iid = iid, name = display, count = count, quest = later }
+          local old = lastBags[iid] or 0
+          if primed and count > old then
+            say(("|cffffb000KEEP|r %s x%d - needed later for %s"):format(display, count, later[Q_NAME]))
+          end
+        elseif #open == 0 then
+          sellList[#sellList + 1] = { iid = iid, name = display, count = count }
+        end
+      end
+    end
+  end
+  lastBags = bags
+end
+
+-- Quest-log pings for items your active quests want.
+local lastHave = {}
+local function checkQuestPings()
   local seen = {}
-  for _, e in ipairs(order) do
+  for _, e in ipairs(activeItems) do
     local k = e.quest .. "\0" .. e.name
     seen[k] = true
     local old = lastHave[k]
     if primed and old and e.have > old then
-      if e.have >= e.need then
-        say(("|cff55ff55%s %d/%d - done!|r (%s)"):format(e.name, e.have, e.need, e.quest))
-      else
-        say(("%s %d/%d (%s)"):format(e.name, e.have, e.need, e.quest))
-      end
+      local color = e.have >= e.need and "|cff55ff55" or "|cffffffff"
+      say(("%s%s %d/%d|r (%s)"):format(color, e.name, e.have, e.need, e.quest))
     end
     lastHave[k] = e.have
   end
   for k in pairs(lastHave) do if not seen[k] then lastHave[k] = nil end end
-  primed = true
 end
 
 -- ---------------------------------------------------------------------------
@@ -111,7 +305,7 @@ end
 -- ---------------------------------------------------------------------------
 local frame = CreateFrame("Frame", "Krom_QuestHoardFrame", UIParent,
   BackdropTemplateMixin and "BackdropTemplate" or nil)
-frame:SetSize(270, 60)
+frame:SetSize(310, 60)
 frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
 frame:SetBackdrop({
   bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -136,7 +330,7 @@ frame:Hide()
 
 local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 header:SetPoint("TOPLEFT", 10, -9)
-header:SetText("Krom QuestHoard - Keep These")
+header:SetText("Krom QuestHoard")
 
 local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", 2, 2)
@@ -150,15 +344,26 @@ local function getLine(i)
   if not lines[i] then
     local fs = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     fs:SetJustifyH("LEFT")
-    fs:SetWidth(250)
+    fs:SetWidth(290)
     lines[i] = fs
   end
   return lines[i]
 end
 
+local MAX_PER_SECTION = 8
+
+local function currentZones()
+  local z = {}
+  if GetRealZoneText then z[GetRealZoneText() or ""] = true end
+  if GetZoneText then z[GetZoneText() or ""] = true end
+  if GetSubZoneText then z[GetSubZoneText() or ""] = true end
+  return z
+end
+
 local function render()
-  local i, lastQuest, y = 0, nil, -28
-  local function add(text)
+  local i, y = 0, -28
+  local function add(text, gap)
+    if gap then y = y - 4 end
     i = i + 1
     local fs = getLine(i)
     fs:ClearAllPoints()
@@ -167,25 +372,66 @@ local function render()
     fs:Show()
     y = y - 14
   end
-
-  if #order == 0 then
-    add("|cff999999No item quests right now.\nGo bully some wolves.|r")
-    y = y - 14
-  else
-    for _, e in ipairs(order) do
-      if e.quest ~= lastQuest then
-        if lastQuest then y = y - 4 end
-        add("|cffffd100" .. e.quest .. "|r")
-        lastQuest = e.quest
+  local function section(title, rows, fmt)
+    if #rows == 0 then return end
+    add("|cffffd100" .. title .. "|r", i > 0)
+    for n, r in ipairs(rows) do
+      if n > MAX_PER_SECTION then
+        add(("   |cff999999...and %d more|r"):format(#rows - MAX_PER_SECTION))
+        break
       end
-      if e.done then
-        add(("   |cff55ff55%s  %d/%d  (done)|r"):format(e.name, e.have, e.need))
-      else
-        add(("   %s  |cffffffff%d/%d|r"):format(e.name, e.have, e.need))
-      end
+      add("   " .. fmt(r))
     end
   end
 
+  -- 1. Items your active quests want
+  section("In your quest log", activeItems, function(e)
+    local c = e.done and "|cff55ff55" or "|cffffffff"
+    return ("%s  %s%d/%d|r  |cff999999%s|r"):format(e.name, c, e.have, e.need, e.quest)
+  end)
+
+  -- 2. In your bags, still needed by a quest you haven't done
+  section("Keep for later (in your bags)", keepList, function(e)
+    return ("%s x%d  |cff999999%s|r"):format(e.name, e.count, e.quest[Q_NAME])
+  end)
+
+  -- 3. Drops in this zone for quests you haven't picked up yet
+  -- (skips profession quests and anything way above your level)
+  local myLevel = UnitLevel and UnitLevel("player") or 60
+  local watch, seen = {}, {}
+  for z in pairs(currentZones()) do
+    for _, pair in ipairs(zoneIndex[z] or {}) do
+      local iid, q = pair[1], pair[2]
+      if not seen[iid] and not lastBags[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
+         and (q[Q_SKILL] or 0) == 0 and (q[Q_REQLEVEL] or 0) <= myLevel + 3
+         and questState(q[Q_ID]) == "todo" then
+        local _, _, _, bind = itemInfo(iid)
+        if not isBound(bind) then
+          seen[iid] = true
+          watch[#watch + 1] = { name = ns.items[iid][1], quest = q }
+        end
+      end
+    end
+  end
+  table.sort(watch, function(a, b) return a.quest[Q_LEVEL] < b.quest[Q_LEVEL] end)
+  section("Watch for (this zone)", watch, function(e)
+    return ("%s  |cff999999%s (lvl %d)|r"):format(e.name, e.quest[Q_NAME], e.quest[Q_LEVEL])
+  end)
+
+  -- 4. Quests done: sell it
+  section("Done with - sell", sellList, function(e)
+    local kind, ah, sell = verdict(e.iid)
+    if kind == "ah" then
+      return ("%s x%d  |cff55ff55AH ~%s|r"):format(e.name, e.count, money(ah))
+    end
+    if sell <= 0 then return ("%s x%d  |cff999999no vendor value|r"):format(e.name, e.count) end
+    return ("%s x%d  vendor %s"):format(e.name, e.count, money(sell * e.count))
+  end)
+
+  if i == 0 then
+    add("|cff999999Nothing to hoard right now.\nGo loot something worth keeping.|r")
+    y = y - 14
+  end
   for j = i + 1, #lines do lines[j]:Hide() end
   frame:SetHeight(-y + 10)
 end
@@ -193,17 +439,44 @@ end
 -- ---------------------------------------------------------------------------
 -- Tooltip tags
 -- ---------------------------------------------------------------------------
+local MAX_TOOLTIP_QUESTS = 4
 local function tagTooltip(tt)
   if not tt or not tt.GetItem then return end
-  local ok, name = pcall(tt.GetItem, tt)
-  if not ok or type(name) ~= "string" then return end
-  local list = byItem[name:lower()]
-  if not list then return end
-  for _, e in ipairs(list) do
-    if e.done then
-      tt:AddLine(("|cff55ff55QuestHoard: done|r - %s"):format(e.quest))
+  local ok, name, link = pcall(tt.GetItem, tt)
+  if not ok or type(link) ~= "string" then return end
+  local iid = tonumber(link:match("item:(%d+)"))
+  if not iid then return end
+  local _, _, _, bind = itemInfo(iid)
+  if isBound(bind) then return end
+  local lname = type(name) == "string" and name:lower() or nil
+  local qs = questsFor(iid, lname)
+  if #qs == 0 then return end
+
+  local open = openQuests(qs)
+  local shown = #open
+  for n, q in ipairs(open) do
+    if n > MAX_TOOLTIP_QUESTS then break end
+    if active[q[Q_ID]] then
+      local p = lname and progress[q[Q_ID] .. ":" .. lname]
+      tt:AddLine(("|cffffb000QuestHoard: KEEP|r %s%s"):format(q[Q_NAME], p and (" " .. p.have .. "/" .. p.need) or ""))
     else
-      tt:AddLine(("|cffffb000QuestHoard: KEEP|r %d/%d - %s"):format(e.have, e.need, e.quest))
+      local where = (q[Q_LEVEL] or 0) > 0 and (" (%s, lvl %d)"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
+      local prof = (q[Q_SKILL] or 0) > 0 and " |cff999999[profession]|r" or ""
+      tt:AddLine(("|cffffb000QuestHoard: KEEP|r for %s%s%s"):format(q[Q_NAME], where, prof))
+    end
+  end
+  open = shown > 0
+  if shown > MAX_TOOLTIP_QUESTS then
+    tt:AddLine(("|cff999999QuestHoard: +%d more quests|r"):format(shown - MAX_TOOLTIP_QUESTS))
+  end
+  if not open then
+    local kind, ah, sell = verdict(iid)
+    if kind == "ah" then
+      tt:AddLine(("|cff55ff55QuestHoard: quests done - AH it (~%s)|r"):format(money(ah)))
+    elseif ah then
+      tt:AddLine(("|cff55ff55QuestHoard: quests done - vendor it|r (AH ~%s isn't worth it)"):format(money(ah)))
+    else
+      tt:AddLine("|cff55ff55QuestHoard: quests done - safe to sell|r")
     end
   end
 end
@@ -219,6 +492,7 @@ end
 -- Refresh (throttled, and wrapped so a client quirk can't spam errors)
 -- ---------------------------------------------------------------------------
 local pending = false
+local lastError
 local function refresh()
   if pending then return end
   pending = true
@@ -226,10 +500,15 @@ local function refresh()
     pending = false
     local ok, err = pcall(function()
       scan()
-      checkPings()
+      checkQuestPings()
+      scanBags()
+      primed = true
       if frame:IsShown() then render() end
     end)
-    if not ok then say("|cffff5555scan error:|r " .. tostring(err)) end
+    if not ok and err ~= lastError then
+      lastError = err
+      say("|cffff5555error:|r " .. tostring(err))
+    end
   end)
 end
 
@@ -241,27 +520,34 @@ ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("QUEST_LOG_UPDATE")
 ev:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
+ev:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+ev:RegisterEvent("ZONE_CHANGED")
+pcall(ev.RegisterEvent, ev, "QUEST_TURNED_IN")
 pcall(ev.RegisterEvent, ev, "BAG_UPDATE_DELAYED")
+pcall(ev.RegisterEvent, ev, "GET_ITEM_INFO_RECEIVED")
 
 ev:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON then
     Krom_QuestHoardDB = Krom_QuestHoardDB or {}
     if Krom_QuestHoardDB.shown == nil then Krom_QuestHoardDB.shown = true end
+    Krom_QuestHoardDB.learned = Krom_QuestHoardDB.learned or {}
     local p = Krom_QuestHoardDB.pos
     if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
+    buildIndexes()
   elseif event == "PLAYER_LOGIN" then
+    setPlayerBits()
     if Krom_QuestHoardDB.shown then frame:Show() end
     local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
     local ver = getMeta and getMeta(ADDON, "Version") or "?"
     say(("online (%s). /qh to toggle the list."):format(ver))
     refresh()
-  else
+  elseif event ~= "ADDON_LOADED" then
     refresh()
   end
 end)
 
 -- ---------------------------------------------------------------------------
--- Slash commands: /qh, /qh lock, /qh reset
+-- Slash commands: /qh, /qh lock, /qh reset, /qh learned
 -- ---------------------------------------------------------------------------
 SLASH_KROMQUESTHOARD1 = "/qh"
 SLASH_KROMQUESTHOARD2 = "/kromquesthoard"
@@ -275,12 +561,20 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     frame:ClearAllPoints()
     frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
     say("window position reset.")
+  elseif msg == "learned" then
+    local n = 0
+    for lname, e in pairs(Krom_QuestHoardDB.learned or {}) do
+      n = n + 1
+      local tag = e.tradeable == true and "tradeable" or e.tradeable == false and "soulbound" or "unchecked"
+      say(("learned: %s (%s)"):format(e.name or lname, tag))
+    end
+    if n == 0 then say("nothing learned yet - the built-in list has you covered so far.") end
   else
     if frame:IsShown() then
       frame:Hide(); Krom_QuestHoardDB.shown = false
     else
       frame:Show(); Krom_QuestHoardDB.shown = true
-      scan(); render()
+      refresh()
     end
   end
 end
