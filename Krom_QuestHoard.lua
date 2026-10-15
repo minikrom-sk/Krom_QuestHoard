@@ -1,7 +1,7 @@
 -- Krom QuestHoard
--- Flags TRADEABLE quest items (the ones you might vendor by accident) so you keep
--- them until their quests are done, then tells you whether to AH or vendor them.
--- Soulbound/quest-class items are ignored on purpose: you can't sell those anyway.
+-- Flags quest items you could vendor by accident (not soulbound, has a vendor value)
+-- so you keep them until their quests are done, then tells you AH or vendor.
+-- Soulbound items and things vendors won't buy are ignored on purpose.
 --
 -- Data: ns.items (Data.lua, generated from QuestieDB's Forever data) plus anything
 -- the addon learns from your quest log. Works on Classic Era and modern clients.
@@ -26,6 +26,17 @@ local function itemInfo(id)
 end
 
 local function isBound(bindType) return bindType == 1 or bindType == 4 end
+
+-- The rule: we only care about items that aren't soulbound AND that a vendor
+-- will buy. If a vendor won't take it, you can't vendor it by accident.
+-- Returns true/false, or nil when the client hasn't loaded the item yet
+-- (asking also makes the client fetch it; GET_ITEM_INFO_RECEIVED refreshes us).
+local function sellable(itemID)
+  if not itemID then return nil end
+  local name, _, sell, bind = itemInfo(itemID)
+  if not name then return nil end
+  return (not isBound(bind)) and (sell or 0) > 0
+end
 
 local function isDone(questID)
   if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
@@ -197,7 +208,12 @@ local function scan()
           if not nameIndex[lname] and not (learnedEntry and learnedEntry.tradeable == false) then
             learn(lname, name, questID, title)
           end
-          local tradeable = nameIndex[lname] or (learnedEntry and learnedEntry.tradeable)
+          local tradeable
+          if nameIndex[lname] then
+            tradeable = sellable(nameIndex[lname])
+          elseif learnedEntry then
+            tradeable = learnedEntry.tradeable
+          end
           if tradeable then
             activeItems[#activeItems + 1] = { name = name, have = have, need = need, quest = title,
                                               done = o.finished or have >= need }
@@ -253,13 +269,14 @@ local function scanBags()
   wipe(keepList); wipe(sellList)
   local bags = bagCounts()
   for iid, count in pairs(bags) do
-    local name, _, _, bind = itemInfo(iid)
+    local name = itemInfo(iid)
     local lname = type(name) == "string" and name:lower() or nil
-    -- Learned items: settle whether they're tradeable once we actually hold one.
+    local ok = sellable(iid)
+    -- Learned items: (re)check whether they're worth tracking whenever we hold one.
     local learned = lname and Krom_QuestHoardDB and Krom_QuestHoardDB.learned and Krom_QuestHoardDB.learned[lname]
-    if learned and bind ~= nil and learned.tradeable == nil then learned.tradeable = not isBound(bind) end
+    if learned and ok ~= nil then learned.tradeable = ok; learned.itemID = iid end
 
-    if not isBound(bind) then
+    if ok then
       local qs = questsFor(iid, lname)
       if #qs > 0 then
         local open = openQuests(qs)
@@ -405,8 +422,7 @@ local function render()
       if not seen[iid] and not lastBags[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
          and (q[Q_SKILL] or 0) == 0 and (q[Q_REQLEVEL] or 0) <= myLevel + 3
          and questState(q[Q_ID]) == "todo" then
-        local _, _, _, bind = itemInfo(iid)
-        if not isBound(bind) then
+        if sellable(iid) then
           seen[iid] = true
           watch[#watch + 1] = { name = ns.items[iid][1], quest = q }
         end
@@ -446,8 +462,7 @@ local function tagTooltip(tt)
   if not ok or type(link) ~= "string" then return end
   local iid = tonumber(link:match("item:(%d+)"))
   if not iid then return end
-  local _, _, _, bind = itemInfo(iid)
-  if isBound(bind) then return end
+  if not sellable(iid) then return end
   local lname = type(name) == "string" and name:lower() or nil
   local qs = questsFor(iid, lname)
   if #qs == 0 then return end
@@ -565,7 +580,7 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     local n = 0
     for lname, e in pairs(Krom_QuestHoardDB.learned or {}) do
       n = n + 1
-      local tag = e.tradeable == true and "tradeable" or e.tradeable == false and "soulbound" or "unchecked"
+      local tag = e.tradeable == true and "tracked" or e.tradeable == false and "ignored: soulbound or no vendor value" or "not seen in bags yet"
       say(("learned: %s (%s)"):format(e.name or lname, tag))
     end
     if n == 0 then say("nothing learned yet - the built-in list has you covered so far.") end

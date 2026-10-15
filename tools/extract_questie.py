@@ -1,8 +1,8 @@
 """Build Krom_QuestHoard's data file from QuestieDB's merged Forever tables.
 
 Keeps every item that some quest asks you to collect (objective or required
-source item) that is NOT a Quest-class item and not a mount. Those are the
-tradeable/vendorable drops you might sell by accident.
+source item), except mounts. The addon filters in game to items that aren't
+soulbound and have a vendor value.
 
 Usage: python3 extract.py <QuestieDB/src/corrections/Forever/combined> <lookupZones.lua> <out.lua>
 """
@@ -51,7 +51,10 @@ for qid, q in quests.items():
         if it is None or it[1] is None:
             continue
         cls, sub = it[12], it[13]
-        if cls == QUEST_CLASS or (cls == MISC_CLASS and sub == MOUNT_SUB):
+        # Item type is NOT a reliable tradeable signal (Forever made Okra a "Quest"
+        # type item and it still sells on the AH). The addon decides in game from
+        # binding + vendor value. Only mounts are dropped here.
+        if cls == MISC_CLASS and sub == MOUNT_SUB:
             skipped += 1
             continue
         e = out.setdefault(iid, {"name": it[1], "quests": []})
@@ -74,7 +77,7 @@ for iid in sorted(out):
 lines.append("}")
 open(OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 
-print(f"kept {len(out)} tradeable items across {sum(len(e['quests']) for e in out.values())} quest links; skipped {skipped} quest/mount item links")
+print(f"kept {len(out)} tradeable items across {sum(len(e['quests']) for e in out.values())} quest links; skipped {skipped} mount links")
 for want in ("Westfall", "Elwynn Forest", "Northshire Valley"):
     hits = sorted({e["name"] for e in out.values() for q in e["quests"] if q[3] == want})
     print(f"  {want}: {', '.join(hits)}")

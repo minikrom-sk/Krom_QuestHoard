@@ -2,7 +2,7 @@
 
 Stops you vendoring the tradeable quest items you'll need later (Murloc Eyes,
 Goretusk Snouts, Hops...), then tells you whether to AH or vendor them once
-their quests are done. Soulbound quest items are ignored, since you can't sell those anyway.
+their quests are done. Only tracks items that are not soulbound and that a vendor will buy (if a vendor won't take it, you can't vendor it by accident).
 
 - **Tooltips:** "KEEP Westfall Stew 2/3", "KEEP for <quest> (zone, level)", or
   "quests done - AH it (~1g 20s)" / "vendor it"
