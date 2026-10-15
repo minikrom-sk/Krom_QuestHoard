@@ -1,40 +1,35 @@
-name: Package and release
+name: Tag new version
 
-# Bump the number in VERSION and push to main -> a tagged release is built
-# automatically and WowUp picks it up.
+# Bump the number in VERSION and push to main -> this tags it, then hands off
+# to "Package and release", which builds the zip WowUp downloads.
 on:
   push:
     branches: [main]
     paths: [VERSION]
-  workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
-  release:
+  tag:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Tag the version
-        id: tag
+      - name: Tag the version and start packaging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="v$(tr -d '[:space:]' < VERSION)"
           if git rev-parse -q --verify "refs/tags/$v" >/dev/null; then
-            echo "$v already released, nothing to do."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$v already tagged, nothing to do."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "$v"
           git push origin "$v"
-
-      - name: Package addon and publish GitHub release
-        if: steps.tag.outputs.skip != 'true'
-        uses: BigWigsMods/packager@v2
-        env:
-          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+          gh workflow run package.yml --ref "$v"
