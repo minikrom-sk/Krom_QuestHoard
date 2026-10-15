@@ -12,6 +12,13 @@ ns.items = ns.items or {}
 local PREFIX = "|cffffb000Krom QuestHoard:|r "
 local function say(msg) print(PREFIX .. msg) end
 
+-- Settings live in Krom_QuestHoardDB; these read them with defaults.
+local function opt(key, default)
+  local db = Krom_QuestHoardDB
+  if not db or db[key] == nil then return default end
+  return db[key]
+end
+
 -- Data row layout: ns.items[itemID] = { name, { {questID, questName, level, zone, raceMask, classMask, requiredLevel, skillID}, ... } }
 local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL = 1, 2, 3, 4, 5, 6, 7, 8
 
@@ -289,7 +296,9 @@ local function scanBags()
           keepList[#keepList + 1] = { iid = iid, name = display, count = count, quest = later }
           local old = lastBags[iid] or 0
           if primed and count > old then
-            say(("|cffffb000KEEP|r %s x%d - needed later for %s"):format(display, count, later[Q_NAME]))
+            if opt("pings", true) then
+              say(("|cffffb000KEEP|r %s x%d - needed later for %s"):format(display, count, later[Q_NAME]))
+            end
           end
         elseif #open == 0 then
           sellList[#sellList + 1] = { iid = iid, name = display, count = count }
@@ -308,7 +317,7 @@ local function checkQuestPings()
     local k = e.quest .. "\0" .. e.name
     seen[k] = true
     local old = lastHave[k]
-    if primed and old and e.have > old then
+    if primed and old and e.have > old and opt("pings", true) then
       local color = e.have >= e.need and "|cff55ff55" or "|cffffffff"
       say(("%s%s %d/%d|r (%s)"):format(color, e.name, e.have, e.need, e.quest))
     end
@@ -353,7 +362,7 @@ local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", 2, 2)
 close:SetScript("OnClick", function()
   frame:Hide(); Krom_QuestHoardDB.shown = false
-  say("hidden. /qh to bring it back.")
+  say("hidden. /qh or the minimap bag brings it back.")
 end)
 
 local lines = {}
@@ -416,7 +425,7 @@ local function render()
   -- (skips profession quests and anything way above your level)
   local myLevel = UnitLevel and UnitLevel("player") or 60
   local watch, seen = {}, {}
-  for z in pairs(currentZones()) do
+  for z in pairs(opt("showWatch", true) and currentZones() or {}) do
     for _, pair in ipairs(zoneIndex[z] or {}) do
       local iid, q = pair[1], pair[2]
       if not seen[iid] and not lastBags[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
@@ -527,6 +536,129 @@ local function refresh()
   end)
 end
 
+
+-- ---------------------------------------------------------------------------
+-- Window toggle, settings panel, minimap button
+-- ---------------------------------------------------------------------------
+local ICON = "Interface\\Icons\\INV_Misc_Bag_10"
+
+local function version()
+  local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+  return getMeta and getMeta(ADDON, "Version") or "?"
+end
+
+local function setShown(show)
+  Krom_QuestHoardDB.shown = show
+  if show then frame:Show(); refresh() else frame:Hide() end
+end
+local function toggleWindow() setShown(not frame:IsShown()) end
+
+local function resetPosition()
+  Krom_QuestHoardDB.pos = nil
+  frame:ClearAllPoints()
+  frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
+end
+
+local DBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
+
+local optionsPanel, optionsCategory
+local function buildOptions()
+  local panel = CreateFrame("Frame")
+  panel.name = "Krom QuestHoard"
+
+  local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", 16, -16)
+  title:SetText("Krom QuestHoard")
+  local sub = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+  sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
+  sub:SetText("Version " .. version() .. " - keeps the quest items you'd otherwise vendor by mistake.")
+
+  local y = -64
+  local checks = {}
+  local function check(label, get, set)
+    local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
+    cb:SetPoint("TOPLEFT", 16, y)
+    y = y - 30
+    local txt = cb.Text or cb.text
+    if type(txt) ~= "table" then txt = nil end
+    if not txt then
+      txt = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+      txt:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+    end
+    txt:SetText(label)
+    cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false) end)
+    cb.get = get
+    checks[#checks + 1] = cb
+  end
+
+  check("Show the QuestHoard window", function() return frame:IsShown() end, setShown)
+  check("Lock window position", function() return opt("locked", false) end,
+    function(v) Krom_QuestHoardDB.locked = v end)
+  check("Show minimap button", function() return not Krom_QuestHoardDB.minimap.hide end, function(v)
+    Krom_QuestHoardDB.minimap.hide = not v
+    if DBIcon then if v then DBIcon:Show(ADDON) else DBIcon:Hide(ADDON) end end
+  end)
+  check("Chat message when you loot something worth keeping", function() return opt("pings", true) end,
+    function(v) Krom_QuestHoardDB.pings = v end)
+  check("Show \"Watch for (this zone)\" in the window", function() return opt("showWatch", true) end,
+    function(v) Krom_QuestHoardDB.showWatch = v; refresh() end)
+
+  local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  reset:SetSize(180, 24)
+  reset:SetPoint("TOPLEFT", 20, y - 8)
+  reset:SetText("Reset window position")
+  reset:SetScript("OnClick", resetPosition)
+
+  local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+  help:SetPoint("TOPLEFT", 20, y - 48)
+  help:SetJustifyH("LEFT")
+  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh learned\n" ..
+               "Minimap button: left-click toggles the window, right-click opens these options.")
+
+  panel:SetScript("OnShow", function()
+    for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
+  end)
+
+  if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
+    optionsCategory = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+    Settings.RegisterAddOnCategory(optionsCategory)
+  elseif InterfaceOptions_AddCategory then
+    InterfaceOptions_AddCategory(panel)
+  end
+  optionsPanel = panel
+end
+
+local function openOptions()
+  if optionsCategory and Settings and Settings.OpenToCategory then
+    Settings.OpenToCategory(optionsCategory:GetID())
+  elseif optionsPanel and InterfaceOptionsFrame_OpenToCategory then
+    -- Old Blizzard quirk: the first call sometimes only opens the frame.
+    InterfaceOptionsFrame_OpenToCategory(optionsPanel)
+    InterfaceOptionsFrame_OpenToCategory(optionsPanel)
+  end
+end
+
+local function buildMinimapButton()
+  if not (LDB and DBIcon) then return end
+  local launcher = LDB:NewDataObject(ADDON, {
+    type = "launcher",
+    text = "Krom QuestHoard",
+    icon = ICON,
+    OnClick = function(_, button)
+      if button == "RightButton" then openOptions() else toggleWindow() end
+    end,
+    OnTooltipShow = function(tt)
+      tt:AddLine("Krom QuestHoard |cff999999" .. version() .. "|r")
+      tt:AddLine(("%d to keep for later, %d done and ready to sell"):format(#keepList, #sellList), 1, 1, 1)
+      tt:AddLine(" ")
+      tt:AddLine("|cffffd100Left-click|r toggle window", 0.8, 0.8, 0.8)
+      tt:AddLine("|cffffd100Right-click|r options", 0.8, 0.8, 0.8)
+    end,
+  })
+  DBIcon:Register(ADDON, launcher, Krom_QuestHoardDB.minimap)
+end
+
 -- ---------------------------------------------------------------------------
 -- Events
 -- ---------------------------------------------------------------------------
@@ -544,17 +676,21 @@ pcall(ev.RegisterEvent, ev, "GET_ITEM_INFO_RECEIVED")
 ev:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON then
     Krom_QuestHoardDB = Krom_QuestHoardDB or {}
-    if Krom_QuestHoardDB.shown == nil then Krom_QuestHoardDB.shown = true end
-    Krom_QuestHoardDB.learned = Krom_QuestHoardDB.learned or {}
-    local p = Krom_QuestHoardDB.pos
+    local db = Krom_QuestHoardDB
+    if db.shown == nil then db.shown = true end
+    db.learned = db.learned or {}
+    db.minimap = db.minimap or {}
+    local p = db.pos
     if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
     buildIndexes()
   elseif event == "PLAYER_LOGIN" then
     setPlayerBits()
+    local ok, err = pcall(buildOptions)
+    if not ok then say("|cffff5555options panel error:|r " .. tostring(err)) end
+    ok, err = pcall(buildMinimapButton)
+    if not ok then say("|cffff5555minimap button error:|r " .. tostring(err)) end
     if Krom_QuestHoardDB.shown then frame:Show() end
-    local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
-    local ver = getMeta and getMeta(ADDON, "Version") or "?"
-    say(("online (%s). /qh to toggle the list."):format(ver))
+    say(("online (%s). /qh toggles the list, right-click the minimap bag for options."):format(version()))
     refresh()
   elseif event ~= "ADDON_LOADED" then
     refresh()
@@ -562,7 +698,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 end)
 
 -- ---------------------------------------------------------------------------
--- Slash commands: /qh, /qh lock, /qh reset, /qh learned
+-- Slash commands
 -- ---------------------------------------------------------------------------
 SLASH_KROMQUESTHOARD1 = "/qh"
 SLASH_KROMQUESTHOARD2 = "/kromquesthoard"
@@ -572,10 +708,15 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     Krom_QuestHoardDB.locked = not Krom_QuestHoardDB.locked
     say(Krom_QuestHoardDB.locked and "window locked." or "window unlocked - drag to move.")
   elseif msg == "reset" then
-    Krom_QuestHoardDB.pos = nil
-    frame:ClearAllPoints()
-    frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
+    resetPosition()
     say("window position reset.")
+  elseif msg == "options" or msg == "config" then
+    openOptions()
+  elseif msg == "minimap" then
+    local hide = not Krom_QuestHoardDB.minimap.hide
+    Krom_QuestHoardDB.minimap.hide = hide
+    if DBIcon then if hide then DBIcon:Hide(ADDON) else DBIcon:Show(ADDON) end end
+    say(hide and "minimap button hidden. /qh minimap brings it back." or "minimap button shown.")
   elseif msg == "learned" then
     local n = 0
     for lname, e in pairs(Krom_QuestHoardDB.learned or {}) do
@@ -585,11 +726,6 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     end
     if n == 0 then say("nothing learned yet - the built-in list has you covered so far.") end
   else
-    if frame:IsShown() then
-      frame:Hide(); Krom_QuestHoardDB.shown = false
-    else
-      frame:Show(); Krom_QuestHoardDB.shown = true
-      refresh()
-    end
+    toggleWindow()
   end
 end

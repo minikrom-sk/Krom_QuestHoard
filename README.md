@@ -10,6 +10,8 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
   drops to watch for in your current zone, and finished items to sell
 - **Chat pings** when you loot something worth keeping
 - **Auctionator (optional):** if installed, its scan prices drive the AH-vs-vendor verdict
+- **Minimap button:** left-click toggles the window, right-click opens options
+  (also under the game's Options -> AddOns)
 - **Self-learning:** quest items missing from the built-in list get recorded as you see them
 
 ## Install (WowUp)
@@ -23,9 +25,13 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - `/qh` toggle the list
 - `/qh lock` lock/unlock the window
 - `/qh reset` reset the window position
+- `/qh options` open the settings panel
+- `/qh minimap` show/hide the minimap button
 - `/qh learned` list items the addon learned on its own
 
 ## Data
 
 `Data.lua` is generated from [QuestieDB](https://github.com/Questie/QuestieDB)'s
 Forever data by `tools/extract_questie.py`. Thanks to the Questie team.
+
+Minimap button uses LibStub, CallbackHandler, LibDataBroker and LibDBIcon (see `Libs/`).
