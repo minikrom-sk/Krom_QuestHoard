@@ -235,6 +235,8 @@ end
 local function questsFor(itemID, lname)
   local list = {}
   local row = itemID and ns.items[itemID]
+  -- row[3]: a vendor sells it, so hoarding it is pointless (unless you opt in).
+  if row and row[3] and not opt("vendorItems", false) then return list end
   if row then
     for _, q in ipairs(row[2]) do
       if fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit) then list[#list + 1] = q end
@@ -331,7 +333,7 @@ end
 -- ---------------------------------------------------------------------------
 local frame = CreateFrame("Frame", "Krom_QuestHoardFrame", UIParent,
   BackdropTemplateMixin and "BackdropTemplate" or nil)
-frame:SetSize(310, 60)
+frame:SetSize(340, 60)
 frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
 frame:SetBackdrop({
   bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -370,7 +372,7 @@ local function getLine(i)
   if not lines[i] then
     local fs = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     fs:SetJustifyH("LEFT")
-    fs:SetWidth(290)
+    fs:SetWidth(320)
     lines[i] = fs
   end
   return lines[i]
@@ -383,7 +385,7 @@ local MAX_PER_SECTION = 8
 -- ---------------------------------------------------------------------------
 local render, refresh -- defined below (forward-declared so the zone picker can call them)
 local zoneBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-zoneBtn:SetSize(290, 20)
+zoneBtn:SetSize(320, 20)
 zoneBtn:SetPoint("TOPLEFT", 10, -26)
 
 local picker = CreateFrame("Frame", nil, frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -519,7 +521,9 @@ function render()
 
   -- 2. In your bags, still needed by a quest you haven't done
   section("Keep for later (in your bags)", keepList, function(e)
-    return ("%s x%d  |cff999999%s|r"):format(e.name, e.count, e.quest[Q_NAME])
+    local q = e.quest
+    local where = (q[Q_LEVEL] or 0) > 0 and (" - %s, lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
+    return ("%s x%d  |cff999999%s%s|r"):format(e.name, e.count, q[Q_NAME], where)
   end)
 
   -- 3. Drops in this zone for quests you haven't picked up yet
@@ -709,6 +713,8 @@ local function buildOptions()
     function(v) Krom_QuestHoardDB.pings = v end)
   check("Show \"Watch for (this zone)\" in the window", function() return opt("showWatch", true) end,
     function(v) Krom_QuestHoardDB.showWatch = v; refresh() end)
+  check("Also track items vendors sell (water, vials, thread...)", function() return opt("vendorItems", false) end,
+    function(v) Krom_QuestHoardDB.vendorItems = v; refresh() end)
 
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   reset:SetSize(180, 24)

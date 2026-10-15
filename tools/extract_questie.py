@@ -57,7 +57,7 @@ for qid, q in quests.items():
         if cls == MISC_CLASS and sub == MOUNT_SUB:
             skipped += 1
             continue
-        e = out.setdefault(iid, {"name": it[1], "quests": []})
+        e = out.setdefault(iid, {"name": it[1], "quests": [], "vendor": it[14] is not None and len(it[14]) > 0})
         e["quests"].append((int(qid), q[1], int(q[5] or 0), zname, races, classes, req_level, skill))
 
 def s(x):
@@ -66,17 +66,18 @@ def s(x):
 lines = [
     "-- AUTO-GENERATED from QuestieDB's Forever data (thanks, Questie team).",
     "-- Do not hand-edit: regenerate with the extractor instead.",
-    "-- [itemID] = { name, { {questID, questName, questLevel, zone, raceMask, classMask, requiredLevel, skillID}, ... } }",
+    "-- [itemID] = { name, { {questID, questName, questLevel, zone, raceMask, classMask, requiredLevel, skillID}, ... }, soldByVendor }",
     "local _, ns = ...",
     "ns.items = {",
 ]
 for iid in sorted(out):
     e = out[iid]
     qs = ", ".join("{%d,%s,%d,%s,%d,%d,%d,%d}" % (a, s(b), c, s(d), r, k, rl, sk) for a, b, c, d, r, k, rl, sk in sorted(e["quests"], key=lambda t: (t[2], t[0])))
-    lines.append("[%d]={%s,{%s}}," % (iid, s(e["name"]), qs))
+    lines.append("[%d]={%s,{%s}%s}," % (iid, s(e["name"]), qs, ",true" if e["vendor"] else ""))
 lines.append("}")
 open(OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 
+print(f"vendor-sold: {sum(1 for e in out.values() if e['vendor'])}")
 print(f"kept {len(out)} tradeable items across {sum(len(e['quests']) for e in out.values())} quest links; skipped {skipped} mount links")
 for want in ("Westfall", "Elwynn Forest", "Northshire Valley"):
     hits = sorted({e["name"] for e in out.values() for q in e["quests"] if q[3] == want})
