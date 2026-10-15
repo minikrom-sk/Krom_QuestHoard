@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Krom QuestHoard
+## Notes: Tracks quest items you need. Tells you what to KEEP.
+## Author: Krom & Co.
+## Version: @project-version@
+## SavedVariables: Krom_QuestHoardDB
+
+Krom_QuestHoard.lua
