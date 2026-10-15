@@ -231,15 +231,33 @@ local function scan()
   end)
 end
 
+local function currentZones()
+  local z = {}
+  if GetRealZoneText then z[GetRealZoneText() or ""] = true end
+  if GetZoneText then z[GetZoneText() or ""] = true end
+  if GetSubZoneText then z[GetSubZoneText() or ""] = true end
+  return z
+end
+
+-- The zone(s) the window is "looking at": the picked zone, or where you are.
+local function viewedZones()
+  local picked = opt("showWatch", true) and Krom_QuestHoardDB and Krom_QuestHoardDB.watchZone
+  if picked then return { [picked] = true } end
+  return currentZones()
+end
+
 -- Quests (for this character) that want an item: from data, then learned.
 local function questsFor(itemID, lname)
   local list = {}
   local row = itemID and ns.items[itemID]
-  -- row[3]: a vendor sells it, so hoarding it is pointless (unless you opt in).
-  if row and row[3] and not opt("vendorItems", false) then return list end
   if row then
+    -- row[3]: a vendor sells it. Only worth flagging for quests in the zone
+    -- you're watching (unless "track vendor items everywhere" is on).
+    local zones = row[3] and not opt("vendorItems", false) and viewedZones() or nil
     for _, q in ipairs(row[2]) do
-      if fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit) then list[#list + 1] = q end
+      if fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit) and (not zones or zones[q[Q_ZONE]]) then
+        list[#list + 1] = q
+      end
     end
     return list
   end
@@ -471,13 +489,6 @@ zoneBtn:SetScript("OnClick", function()
   if picker:IsShown() then picker:Hide() else showPicker() end
 end)
 
-local function currentZones()
-  local z = {}
-  if GetRealZoneText then z[GetRealZoneText() or ""] = true end
-  if GetZoneText then z[GetZoneText() or ""] = true end
-  if GetSubZoneText then z[GetSubZoneText() or ""] = true end
-  return z
-end
 
 function render()
   local watching = opt("showWatch", true)
@@ -713,7 +724,8 @@ local function buildOptions()
     function(v) Krom_QuestHoardDB.pings = v end)
   check("Show \"Watch for (this zone)\" in the window", function() return opt("showWatch", true) end,
     function(v) Krom_QuestHoardDB.showWatch = v; refresh() end)
-  check("Also track items vendors sell (water, vials, thread...)", function() return opt("vendorItems", false) end,
+  check("Track vendor-sold items (water, vials...) in every zone, not just the watched one",
+    function() return opt("vendorItems", false) end,
     function(v) Krom_QuestHoardDB.vendorItems = v; refresh() end)
 
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
