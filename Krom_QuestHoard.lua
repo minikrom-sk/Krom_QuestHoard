@@ -19,8 +19,8 @@ local function opt(key, default)
   return db[key]
 end
 
--- Data row layout: ns.items[itemID] = { name, { {questID, questName, level, zone, raceMask, classMask, requiredLevel, skillID}, ... } }
-local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL = 1, 2, 3, 4, 5, 6, 7, 8
+-- Data row layout: ns.items[itemID] = { name, { {questID, questName, level, zone, raceMask, classMask, requiredLevel, skillID, countNeeded}, ... }, soldByVendor }
+local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL, Q_NEED = 1, 2, 3, 4, 5, 6, 7, 8, 9
 
 -- ---------------------------------------------------------------------------
 -- API shims (Classic Era uses older globals, modern clients use C_ namespaces)
@@ -385,10 +385,60 @@ close:SetScript("OnClick", function()
   say("hidden. /qh or the minimap bag brings it back.")
 end)
 
+-- Scrollable content area (mouse wheel), with a resize grip in the corner.
+local AUTO_MAX_HEIGHT = 480
+local scroll = CreateFrame("ScrollFrame", nil, frame)
+scroll:SetPoint("BOTTOMRIGHT", -6, 8)
+local content = CreateFrame("Frame", nil, scroll)
+content:SetSize(330, 1)
+scroll:SetScrollChild(content)
+
+local moreHint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+moreHint:SetPoint("BOTTOMRIGHT", -22, 4)
+moreHint:SetText("scroll for more")
+moreHint:Hide()
+
+local function clampScroll(v)
+  local max = math.max(0, (content:GetHeight() or 0) - (scroll:GetHeight() or 0))
+  v = math.max(0, math.min(v or scroll:GetVerticalScroll() or 0, max))
+  scroll:SetVerticalScroll(v)
+  if v < max - 1 then moreHint:Show() else moreHint:Hide() end
+end
+scroll:EnableMouseWheel(true)
+scroll:SetScript("OnMouseWheel", function(_, delta) clampScroll((scroll:GetVerticalScroll() or 0) - delta * 42) end)
+
+frame:SetResizable(true)
+if frame.SetResizeBounds then
+  frame:SetResizeBounds(340, 90, 340, 1000)
+elseif frame.SetMinResize then
+  frame:SetMinResize(340, 90); frame:SetMaxResize(340, 1000)
+end
+local grip = CreateFrame("Button", nil, frame)
+grip:SetSize(16, 16)
+grip:SetPoint("BOTTOMRIGHT", -3, 3)
+grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+grip:SetScript("OnMouseDown", function()
+  if not (Krom_QuestHoardDB and Krom_QuestHoardDB.locked) then frame:StartSizing("BOTTOM") end
+end)
+grip:SetScript("OnMouseUp", function()
+  frame:StopMovingOrSizing()
+  Krom_QuestHoardDB.height = math.floor(frame:GetHeight() + 0.5)
+  local p, _, rp, x, y = frame:GetPoint()
+  Krom_QuestHoardDB.pos = { p, rp, x, y }
+  clampScroll()
+end)
+grip:SetScript("OnDoubleClick", function()
+  Krom_QuestHoardDB.height = nil -- back to auto-fit
+  if refresh then refresh() end
+end)
+frame:SetScript("OnSizeChanged", function() clampScroll() end)
+
 local lines = {}
 local function getLine(i)
   if not lines[i] then
-    local fs = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    local fs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     fs:SetJustifyH("LEFT")
     fs:SetWidth(320)
     lines[i] = fs
@@ -396,7 +446,7 @@ local function getLine(i)
   return lines[i]
 end
 
-local MAX_PER_SECTION = 8
+local MAX_PER_SECTION = 25 -- the window scrolls now, so show plenty
 
 -- ---------------------------------------------------------------------------
 -- Zone picker: watch another zone's drops (e.g. plan Westfall from Northshire)
@@ -501,13 +551,15 @@ function render()
   else
     zoneBtn:Hide(); picker:Hide()
   end
-  local i, y = 0, watching and -50 or -28
+  local top = watching and -50 or -28
+  scroll:SetPoint("TOPLEFT", 4, top)
+  local i, y = 0, -2
   local function add(text, gap)
     if gap then y = y - 4 end
     i = i + 1
     local fs = getLine(i)
     fs:ClearAllPoints()
-    fs:SetPoint("TOPLEFT", 12, y)
+    fs:SetPoint("TOPLEFT", 8, y)
     fs:SetText(text)
     fs:Show()
     y = y - 14
@@ -534,7 +586,10 @@ function render()
   section("Keep for later (in your bags)", keepList, function(e)
     local q = e.quest
     local where = (q[Q_LEVEL] or 0) > 0 and (" - %s, lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
-    return ("%s x%d  |cff999999%s%s|r"):format(e.name, e.count, q[Q_NAME], where)
+    local need = q[Q_NEED] or 0
+    local have = need > 0 and ("%s%d/%d|r"):format(e.count >= need and "|cff55ff55" or "|cffffffff", e.count, need)
+                          or ("x%d"):format(e.count)
+    return ("%s %s  |cff999999%s%s|r"):format(e.name, have, q[Q_NAME], where)
   end)
 
   -- 3. Drops in this zone for quests you haven't picked up yet
@@ -557,7 +612,8 @@ function render()
   end
   table.sort(watch, function(a, b) return a.quest[Q_LEVEL] < b.quest[Q_LEVEL] end)
   section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
-    return ("%s  |cff999999%s (lvl %d)|r"):format(e.name, e.quest[Q_NAME], e.quest[Q_LEVEL])
+    local need = (e.quest[Q_NEED] or 0) > 0 and ("x%d  "):format(e.quest[Q_NEED]) or ""
+    return ("%s %s|cff999999%s (lvl %d)|r"):format(e.name, need, e.quest[Q_NAME], e.quest[Q_LEVEL])
   end)
   if picked and #watch == 0 then
     add(("|cffffd100Watch for in %s|r"):format(picked), i > 0)
@@ -579,7 +635,11 @@ function render()
     y = y - 14
   end
   for j = i + 1, #lines do lines[j]:Hide() end
-  frame:SetHeight(-y + 10)
+  local contentH = -y + 4
+  content:SetHeight(contentH)
+  local saved = Krom_QuestHoardDB and Krom_QuestHoardDB.height
+  frame:SetHeight(saved or math.min(-top + contentH + 12, AUTO_MAX_HEIGHT))
+  clampScroll()
 end
 
 -- ---------------------------------------------------------------------------
@@ -607,7 +667,8 @@ local function tagTooltip(tt)
     else
       local where = (q[Q_LEVEL] or 0) > 0 and (" (%s, lvl %d)"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
       local prof = (q[Q_SKILL] or 0) > 0 and " |cff999999[profession]|r" or ""
-      tt:AddLine(("|cffffb000QuestHoard: KEEP|r for %s%s%s"):format(q[Q_NAME], where, prof))
+      local need = (q[Q_NEED] or 0) > 0 and (q[Q_NEED] .. " ") or ""
+      tt:AddLine(("|cffffb000QuestHoard: KEEP|r %sfor %s%s%s"):format(need, q[Q_NAME], where, prof))
     end
   end
   open = shown > 0
