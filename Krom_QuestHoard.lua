@@ -13,7 +13,7 @@ local PREFIX = "|cffffb000Krom QuestHoard:|r "
 local function say(msg) print(PREFIX .. msg) end
 
 -- Defined further down; declared here so UI handlers above them can call them.
-local render, refresh
+local render, refresh, setCompactFn
 
 -- Settings live in Krom_QuestHoardDB; these read them with defaults.
 local function opt(key, default)
@@ -497,8 +497,23 @@ local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
 close:SetPoint("TOPRIGHT", 2, 2)
 close:SetScript("OnClick", function()
   frame:Hide(); Krom_QuestHoardDB.shown = false
-  say("hidden. /qh or the minimap bag brings it back.")
+  say("hidden. /qh or the minimap button brings it back.")
 end)
+-- "Compact" button next to close: swaps the window for the slim tracker list.
+local slim = CreateFrame("Button", nil, frame)
+slim:SetSize(20, 20)
+slim:SetPoint("RIGHT", close, "LEFT", 2, 0)
+slim:SetNormalTexture("Interface\\Buttons\\UI-Panel-SmallerButton-Up")
+slim:SetPushedTexture("Interface\\Buttons\\UI-Panel-SmallerButton-Down")
+slim:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
+slim:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+  GameTooltip:AddLine("Compact mode")
+  GameTooltip:AddLine("Swap to a slim list with no background.", 1, 1, 1)
+  GameTooltip:Show()
+end)
+slim:SetScript("OnLeave", function() GameTooltip:Hide() end)
+slim:SetScript("OnClick", function() if setCompactFn then setCompactFn(true) end end)
 
 -- Scrollable content area (mouse wheel), with a resize grip in the corner.
 local AUTO_MAX_HEIGHT = 480
@@ -570,6 +585,9 @@ local BASE_FONT, BASE_SIZE, BASE_FLAGS = GameFontHighlightSmall:GetFont()
 BASE_SIZE = math.floor((BASE_SIZE or 10) + 0.5)
 local function applyFont()
   listFont:SetFont(BASE_FONT, opt("fontSize", BASE_SIZE), BASE_FLAGS)
+  if Krom_QuestHoardCompactFont then
+    Krom_QuestHoardCompactFont:SetFont(BASE_FONT, opt("fontSize", BASE_SIZE), "OUTLINE")
+  end
   if refresh then refresh() end
 end
 
@@ -592,36 +610,109 @@ local function toggleHidden(iid)
   if refresh then refresh() end
 end
 
-local function getLine(i)
-  if not lines[i] then
-    local row = CreateFrame("Button", nil, content)
-    row:SetHeight(14)
-    row:SetWidth((frame:GetWidth() or 340) - 34)
-    row:RegisterForClicks("RightButtonUp")
-    local fs = row:CreateFontString(nil, "OVERLAY")
-    fs:SetFontObject(listFont)
-    fs:SetPoint("TOPLEFT")
-    fs:SetJustifyH("LEFT")
-    fs:SetWidth((frame:GetWidth() or 340) - 34)
-    row.fs = fs
-    local hl = row:CreateTexture(nil, "HIGHLIGHT")
-    hl:SetAllPoints()
-    hl:SetColorTexture(1, 1, 1, 0.07)
-    row:SetScript("OnClick", function(self, button)
-      if button == "RightButton" and self.iid then toggleHidden(self.iid) end
-    end)
-    row:SetScript("OnEnter", function(self)
-      if not self.iid then return end
-      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetHyperlink("item:" .. self.iid)
-      GameTooltip:AddLine(isHidden(self.iid) and "|cff999999Right-click: unhide|r" or "|cff999999Right-click: hide from QuestHoard|r")
-      GameTooltip:Show()
-    end)
-    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    lines[i] = row
-  end
-  return lines[i]
+-- Section collapse state (shared by both modes): db.collapsed[key] = true
+local function isCollapsed(key)
+  return key and Krom_QuestHoardDB and Krom_QuestHoardDB.collapsed and Krom_QuestHoardDB.collapsed[key] or false
 end
+local function toggleCollapsed(key)
+  local db = Krom_QuestHoardDB
+  db.collapsed = db.collapsed or {}
+  db.collapsed[key] = (not db.collapsed[key]) or nil
+  if refresh then refresh() end
+end
+
+-- A pool of clickable text rows. Item rows: hover = item tooltip, right-click
+-- = hide. Header rows: left-click = collapse/expand that section.
+local function makePool(parent, fontObj, widthFn)
+  local pool = {}
+  function pool.get(i)
+    if not pool[i] then
+      local row = CreateFrame("Button", nil, parent)
+      row:SetHeight(14)
+      row:SetWidth(widthFn())
+      row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+      local fs = row:CreateFontString(nil, "OVERLAY")
+      fs:SetFontObject(fontObj)
+      fs:SetPoint("TOPLEFT")
+      fs:SetJustifyH("LEFT")
+      fs:SetWidth(widthFn())
+      row.fs = fs
+      local hl = row:CreateTexture(nil, "HIGHLIGHT")
+      hl:SetAllPoints()
+      hl:SetColorTexture(1, 1, 1, 0.07)
+      row:SetScript("OnClick", function(self, button)
+        if self.collapseKey and button == "LeftButton" then toggleCollapsed(self.collapseKey)
+        elseif button == "RightButton" and self.iid then toggleHidden(self.iid) end
+      end)
+      row:SetScript("OnEnter", function(self)
+        if self.collapseKey then
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          GameTooltip:AddLine(isCollapsed(self.collapseKey) and "Click to expand" or "Click to collapse")
+          GameTooltip:Show()
+        elseif self.iid then
+          GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+          GameTooltip:SetHyperlink("item:" .. self.iid)
+          GameTooltip:AddLine(isHidden(self.iid) and "|cff999999Right-click: unhide|r" or "|cff999999Right-click: hide from QuestHoard|r")
+          GameTooltip:Show()
+        end
+      end)
+      row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+      pool[i] = row
+    end
+    return pool[i]
+  end
+  return pool
+end
+local fullPool = makePool(content, listFont, function() return (frame:GetWidth() or 340) - 34 end)
+lines = fullPool -- fitWidths() resizes these
+
+-- ---------------------------------------------------------------------------
+-- Compact tracker: no background, just an outlined list (Questie-tracker style)
+-- ---------------------------------------------------------------------------
+local COMPACT_W = 260
+local compactFont = CreateFont("Krom_QuestHoardCompactFont")
+compactFont:CopyFontObject(GameFontHighlightSmall)
+local compact = CreateFrame("Frame", "Krom_QuestHoardCompactFrame", UIParent)
+compact:SetSize(COMPACT_W, 40)
+compact:SetPoint("RIGHT", UIParent, "RIGHT", -60, 120)
+compact:SetClampedToScreen(true)
+compact:SetMovable(true)
+compact:Hide()
+local compactTitle = CreateFrame("Button", nil, compact)
+compactTitle:SetHeight(16)
+compactTitle:SetPoint("TOPLEFT")
+compactTitle:SetPoint("TOPRIGHT")
+compactTitle:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+compactTitle:RegisterForDrag("LeftButton")
+local compactTitleText = compactTitle:CreateFontString(nil, "OVERLAY")
+compactTitleText:SetFontObject(compactFont)
+compactTitleText:SetPoint("LEFT")
+compactTitle:SetScript("OnDragStart", function()
+  if not (Krom_QuestHoardDB and Krom_QuestHoardDB.locked) then compact:StartMoving() end
+end)
+compactTitle:SetScript("OnDragStop", function()
+  compact:StopMovingOrSizing()
+  local p, _, rp, x, y = compact:GetPoint()
+  Krom_QuestHoardDB.cpos = { p, rp, x, y }
+end)
+compactTitle:SetScript("OnClick", function(_, button)
+  if button == "RightButton" and setCompactFn then setCompactFn(false) end
+end)
+compactTitle:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+  GameTooltip:AddLine("Krom QuestHoard (compact)")
+  GameTooltip:AddLine("Drag to move. Click a heading to collapse it.", 1, 1, 1)
+  GameTooltip:AddLine("Right-click: switch to the full window.", 1, 1, 1)
+  GameTooltip:Show()
+end)
+compactTitle:SetScript("OnLeave", function() GameTooltip:Hide() end)
+local compactContent = CreateFrame("Frame", nil, compact)
+compactContent:SetPoint("TOPLEFT", 0, -18)
+compactContent:SetSize(COMPACT_W, 1)
+local compactPool = makePool(compactContent, compactFont, function() return COMPACT_W end)
+
+local function isCompact() return opt("compact", false) end
+local function activeFrame() return isCompact() and compact or frame end
 
 local MAX_PER_SECTION = 25 -- the window scrolls now, so show plenty
 
@@ -909,9 +1000,17 @@ local function cycleStyle(dir)
 end
 
 function render()
+  local compactMode = isCompact()
+  -- Compact sits on the game world, so it always uses light text with an outline;
+  -- the full window's ink follows its style.
+  local ink = (compactMode or not currentStyle().light) and LIGHT_INK or DARK_INK
+  for k, v in pairs(ink) do C[k] = v end
+  local pool = compactMode and compactPool or fullPool
   local watching = opt("showWatch", true)
   local picked = watching and Krom_QuestHoardDB and Krom_QuestHoardDB.watchZone or nil
-  if watching then
+  if compactMode then
+    -- nothing: compact has no zone button, filters or scroll area
+  elseif watching then
     local label = picked and ("Watching: %s  |cff999999(click to change)|r"):format(picked)
                           or "Watching: current zone  |cff999999(click to change)|r"
     zoneBtn:SetText(label)
@@ -919,29 +1018,34 @@ function render()
   else
     zoneBtn:Hide(); picker:Hide()
   end
-  placeFilters(watching and -47 or -25)
   local top = watching and -68 or -46
-  scroll:SetPoint("TOPLEFT", 4, top)
+  if not compactMode then
+    placeFilters(watching and -47 or -25)
+    scroll:SetPoint("TOPLEFT", 4, top)
+  end
   local i, y = 0, -2
-  local function add(text, gap, iid)
-    if gap then y = y - 4 end
+  local function add(text, gap, iid, collapseKey)
+    if gap then y = y - (compactMode and 2 or 4) end
     i = i + 1
-    local row = getLine(i)
+    local row = pool.get(i)
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", 8, y)
+    row:SetPoint("TOPLEFT", compactMode and 0 or 8, y)
     row.fs:SetText(text)
     if C.text == DARK_INK.text then row.fs:SetTextColor(0.13, 0.09, 0.04) else row.fs:SetTextColor(1, 1, 1) end
-    row.iid = iid
+    row.iid, row.collapseKey = iid, collapseKey
     row:Show()
-    local h = math.max(14, (row.fs:GetStringHeight() or 14))
+    local h = math.max(12, (row.fs:GetStringHeight() or 14))
     row:SetHeight(h)
     y = y - h
   end
-  local function section(title, rows, fmt)
+  local function section(key, title, rows, fmt)
     local shown = {}
     for _, r in ipairs(rows) do if not hiddenFiltered(r.iid) then shown[#shown + 1] = r end end
     if #shown == 0 then return end
-    add(C.header .. title .. "|r", i > 0)
+    local collapsed = isCollapsed(key)
+    add(("%s%s %s|r%s"):format(C.muted, collapsed and "[+]" or "[-]", C.header .. title,
+      collapsed and (" " .. C.muted .. "(" .. #shown .. ")|r") or ""), i > 0, nil, key)
+    if collapsed then return end
     for n, r in ipairs(shown) do
       if n > MAX_PER_SECTION then
         add(("   " .. C.muted .. "...and %d more|r"):format(#shown - MAX_PER_SECTION))
@@ -954,13 +1058,14 @@ function render()
   end
 
   -- 1. Items your active quests want
-  section("In your quest log", opt("showLog", true) and activeItems or {}, function(e)
+  local showLog = compactMode and opt("compactLog", false) or (not compactMode and opt("showLog", true))
+  section("log", "In your quest log", showLog and activeItems or {}, function(e)
     local c = e.done and C.good or C.text
     return ("%s%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(profIcon(e.q), e.name, c, e.have, e.need, e.quest)
   end)
 
   -- 2. In your bags, still needed by a quest you haven't done
-  section("Keep for later (in your bags)", keepList, function(e)
+  section("keep", compactMode and "Keep for later" or "Keep for later (in your bags)", keepList, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
     local where = (q[Q_LEVEL] or 0) > 0 and ("%s lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
@@ -987,19 +1092,19 @@ function render()
     end
   end
   table.sort(watch, function(a, b) return a.quest[Q_LEVEL] < b.quest[Q_LEVEL] end)
-  section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
+  section("watch", picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
     return ("%s%s %s  " .. C.muted .. "%s%s (lvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
       need > 0 and (" x" .. need) or "", q[Q_LEVEL])
   end)
-  if picked and #watch == 0 then
+  if picked and #watch == 0 and not compactMode then
     add((C.header .. "Watch for in %s|r"):format(picked), i > 0)
     add("   " .. C.muted .. "Nothing sellable to keep for quests there.|r")
   end
 
   -- 4. Quests done: sell it
-  section("Done with - sell", sellList, function(e)
+  section("sell", "Done with - sell", sellList, function(e)
     local kind, ah, sell = verdict(e.iid)
     if kind == "ah" then
       return ("%s x%d  " .. C.good .. "AH ~%s|r"):format(e.name, e.count, money(ah))
@@ -1009,10 +1114,16 @@ function render()
   end)
 
   if i == 0 then
-    add(C.muted .. "Nothing to hoard right now.\nGo loot something worth keeping.|r")
-    y = y - 14
+    add(C.muted .. (compactMode and "Nothing to hoard." or "Nothing to hoard right now.\nGo loot something worth keeping.|r"))
+    if not compactMode then y = y - 14 end
   end
-  for j = i + 1, #lines do lines[j]:Hide() end
+  for j = i + 1, #pool do pool[j]:Hide() end
+  if compactMode then
+    compactTitleText:SetText(C.header .. "Krom QuestHoard|r")
+    compactContent:SetHeight(-y + 2)
+    compact:SetHeight(18 + (-y) + 4)
+    return
+  end
   local contentH = -y + 4
   content:SetHeight(contentH)
   local saved = Krom_QuestHoardDB and Krom_QuestHoardDB.height
@@ -1091,7 +1202,7 @@ function refresh()
       checkQuestPings()
       scanBags()
       primed = true
-      if frame:IsShown() then render() end
+      if frame:IsShown() or compact:IsShown() then render() end
     end)
     if not ok and err ~= lastError then
       lastError = err
@@ -1114,11 +1225,19 @@ local function version()
   return getMeta and getMeta(ADDON, "Version") or "?"
 end
 
+-- Show/hide whichever mode is active (full window or compact tracker).
 local function setShown(show)
   Krom_QuestHoardDB.shown = show
-  if show then frame:Show(); refresh() else frame:Hide() end
+  frame:Hide(); compact:Hide(); picker:Hide()
+  if show then activeFrame():Show(); refresh() end
 end
-local function toggleWindow() setShown(not frame:IsShown()) end
+local function toggleWindow() setShown(not activeFrame():IsShown()) end
+
+local function setCompact(on)
+  Krom_QuestHoardDB.compact = on and true or nil
+  setShown(true)
+end
+setCompactFn = setCompact
 
 local function resetPosition()
   Krom_QuestHoardDB.pos, Krom_QuestHoardDB.height, Krom_QuestHoardDB.width = nil, nil, nil
@@ -1161,7 +1280,10 @@ local function buildOptions()
     checks[#checks + 1] = cb
   end
 
-  check("Show the QuestHoard window", function() return frame:IsShown() end, setShown)
+  check("Show the QuestHoard window", function() return activeFrame():IsShown() end, setShown)
+  check("Compact mode (no background, just the list)", function() return isCompact() end, setCompact)
+  check("Compact mode: also list quest log items", function() return opt("compactLog", false) end,
+    function(v) Krom_QuestHoardDB.compactLog = v; refresh() end)
   check("Lock window position", function() return opt("locked", false) end,
     function(v) Krom_QuestHoardDB.locked = v end)
   check("Show minimap button", function() return not Krom_QuestHoardDB.minimap.hide end, function(v)
@@ -1274,7 +1396,7 @@ local function buildOptions()
   local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
   help:SetPoint("TOPLEFT", 20, y - 48)
   help:SetJustifyH("LEFT")
-  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n" ..
+  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh compact, /qh full, /qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n" ..
                "Minimap button: left-click toggles the window, right-click opens these options.\n" ..
                "Right-click an item in the window to hide it; tick 'Hidden' to see or unhide them.")
 
@@ -1311,13 +1433,16 @@ local function buildMinimapButton()
     text = "Krom QuestHoard",
     icon = ICON,
     OnClick = function(_, button)
-      if button == "RightButton" then openOptions() else toggleWindow() end
+      if button == "RightButton" then openOptions()
+      elseif IsShiftKeyDown and IsShiftKeyDown() then setCompact(not isCompact())
+      else toggleWindow() end
     end,
     OnTooltipShow = function(tt)
       tt:AddLine("Krom QuestHoard |cff999999" .. version() .. "|r")
       tt:AddLine(("%d to keep for later, %d done and ready to sell"):format(#keepList, #sellList), 1, 1, 1)
       tt:AddLine(" ")
       tt:AddLine("|cffffd100Left-click|r toggle window", 0.8, 0.8, 0.8)
+      tt:AddLine("|cffffd100Shift-click|r switch full / compact", 0.8, 0.8, 0.8)
       tt:AddLine("|cffffd100Right-click|r options", 0.8, 0.8, 0.8)
     end,
   })
@@ -1357,7 +1482,9 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     if not ok then say("|cffff5555options panel error:|r " .. tostring(err)) end
     ok, err = pcall(buildMinimapButton)
     if not ok then say("|cffff5555minimap button error:|r " .. tostring(err)) end
-    if Krom_QuestHoardDB.shown then frame:Show() end
+    local cp = Krom_QuestHoardDB.cpos
+    if cp then compact:ClearAllPoints(); compact:SetPoint(cp[1], UIParent, cp[2], cp[3], cp[4]) end
+    if Krom_QuestHoardDB.shown then activeFrame():Show() end
     say(("online (%s). /qh toggles the list, right-click the minimap bag for options."):format(version()))
     refresh()
   elseif event ~= "ADDON_LOADED" then
@@ -1412,6 +1539,9 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     else
       say("usage: /qh opacity 0-100")
     end
+  elseif msg == "compact" or msg == "full" then
+    setCompact(msg == "compact" or (msg ~= "full" and not isCompact()))
+    say(isCompact() and "compact mode. /qh full for the full window." or "full window. /qh compact for the slim list.")
   elseif msg == "options" or msg == "config" then
     openOptions()
   elseif msg == "minimap" then

@@ -10,6 +10,9 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
   drops to watch for in your current zone (or any zone you pick), and finished items to sell
 - **Chat pings** when you loot something worth keeping
 - **Auctionator (optional):** if installed, its scan prices drive the AH-vs-vendor verdict
+- **Compact mode:** a slim, background-free list (like Questie's tracker). Switch with the
+  button next to the window's close X, Shift-click the minimap button, `/qh compact` / `/qh full`,
+  or right-click the compact list's title. Click any section heading to collapse it.
 - **Minimap button:** left-click toggles the window, right-click opens options
   (also under the game's Options -> AddOns)
 - **Right-click an item** in the window to hide it; tick "Hidden" to see or unhide
