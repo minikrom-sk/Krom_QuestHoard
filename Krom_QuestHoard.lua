@@ -90,8 +90,61 @@ end
 
 -- Window filter: show/hide normal quests and profession quests.
 local function isProfQuest(q) return (profInfo(q)) ~= nil end
+local profByName = {}  -- lowercase profession name -> skill ID (quest-log headers)
+for id, p in pairs(PROFESSIONS) do profByName[p[1]:lower()] = id end
+-- Localized names, so headers match on non-English clients too.
+if GetSpellInfo then
+  local spells = { [171] = 2259, [164] = 2018, [185] = 2550, [333] = 7411, [202] = 4036, [129] = 3273,
+                   [356] = 7620, [182] = 2366, [165] = 2108, [186] = 2575, [393] = 8613, [197] = 3908 }
+  for id, spell in pairs(spells) do
+    local ok, n = pcall(GetSpellInfo, spell)
+    if ok and type(n) == "string" then profByName[n:lower()] = id end
+  end
+end
+
+-- Professions this character knows (skill IDs), read from the game.
+-- Refreshed at login and whenever skills change.
+local knownProfs = {}
+local function scanProfessions()
+  wipe(knownProfs)
+  if GetProfessions and GetProfessionInfo then -- modern clients
+    for _, idx in ipairs({ GetProfessions() }) do
+      if idx then
+        local ok, name, _, _, _, _, _, skillLine = pcall(GetProfessionInfo, idx)
+        if ok then
+          if skillLine and PROFESSIONS[skillLine] then knownProfs[skillLine] = true end
+          local id = name and profByName[name:lower()]
+          if id then knownProfs[id] = true end
+        end
+      end
+    end
+  end
+  if GetNumSkillLines and GetSkillLineInfo then -- classic clients
+    for i = 1, (GetNumSkillLines() or 0) do
+      local name, isHeader = GetSkillLineInfo(i)
+      local id = name and not isHeader and profByName[name:lower()]
+      if id then knownProfs[id] = true end
+    end
+  end
+end
+local function knowsProfession(q)
+  local p = q and PROFESSIONS[math.abs(q[Q_PROF] or 0)] and math.abs(q[Q_PROF])
+  if not p then -- header-learned profession
+    local db = Krom_QuestHoardDB
+    p = q and (liveProf[q[Q_ID]] or (db and db.profQuests and db.profQuests[q[Q_ID]]))
+  end
+  return p and knownProfs[p] or false
+end
+
+-- Profession quests: "Profession" filter shows/hides them all; "only my
+-- professions" (Options) further limits them to professions you know.
+-- Quests already in your quest log are never filtered (callers skip this).
 local function passesFilter(q)
-  if isProfQuest(q) then return opt("showProf", true) end
+  if isProfQuest(q) then
+    if not opt("showProf", true) then return false end
+    if opt("myProfOnly", false) and not knowsProfession(q) then return false end
+    return true
+  end
   return opt("showNormal", true)
 end
 
@@ -227,17 +280,6 @@ end
 local nameIndex = {}   -- lowercase item name -> itemID
 local zoneIndex = {}   -- zone name -> { {itemID, questRow}, ... }
 local questIndex = {}  -- questID -> quest record (for profession/zone lookups)
-local profByName = {}  -- lowercase profession name -> skill ID (quest-log headers)
-for id, p in pairs(PROFESSIONS) do profByName[p[1]:lower()] = id end
--- Localized names, so headers match on non-English clients too.
-if GetSpellInfo then
-  local spells = { [171] = 2259, [164] = 2018, [185] = 2550, [333] = 7411, [202] = 4036, [129] = 3273,
-                   [356] = 7620, [182] = 2366, [165] = 2108, [186] = 2575, [393] = 8613, [197] = 3908 }
-  for id, spell in pairs(spells) do
-    local ok, n = pcall(GetSpellInfo, spell)
-    if ok and type(n) == "string" then profByName[n:lower()] = id end
-  end
-end
 
 local function buildIndexes()
   for iid, row in pairs(ns.items) do
@@ -986,7 +1028,10 @@ filterCheck("Quest log", "showLog", 10, true,
 filterCheck("Normal", "showNormal", 0, true,
   "Show items for regular quests (anything that isn't a profession quest).")
 filterCheck("Profession", "showProf", 0, true,
-  "Show items for profession quests. Full-color icon = the quest requires that profession; dimmed icon = only themed around it, anyone can do it.")
+  function()
+    return "Show items for profession quests. Full-color icon = the quest requires that profession; dimmed icon = only themed around it, anyone can do it."
+      .. (opt("myProfOnly", false) and "\nOnly your own professions are shown (change in Options)." or "")
+  end)
 filterCheck("Hidden", "showHidden", 0, false,
   "Show items you've right-click hidden, greyed out with (hidden). Right-click one again to unhide it.")
 filterCheck("Done", "showDone", 0, false,
@@ -1645,6 +1690,9 @@ local function buildOptions()
     function(v) Krom_QuestHoardDB.pings = v end)
   check("Show \"Watch for (this zone)\" in the window", function() return opt("showWatch", true) end,
     function(v) Krom_QuestHoardDB.showWatch = v; refresh() end)
+  check("Only show profession quests for professions I have (quests in my log always show)",
+    function() return opt("myProfOnly", false) end,
+    function(v) Krom_QuestHoardDB.myProfOnly = v; scanProfessions(); refresh() end)
   check("Track vendor-sold items (water, vials...) in every zone, not just the watched one",
     function() return opt("vendorItems", false) end,
     function(v) Krom_QuestHoardDB.vendorItems = v; refresh() end)
@@ -1878,6 +1926,7 @@ ev:RegisterEvent("ZONE_CHANGED")
 pcall(ev.RegisterEvent, ev, "QUEST_TURNED_IN")
 pcall(ev.RegisterEvent, ev, "BAG_UPDATE_DELAYED")
 pcall(ev.RegisterEvent, ev, "GET_ITEM_INFO_RECEIVED")
+pcall(ev.RegisterEvent, ev, "SKILL_LINES_CHANGED")
 
 ev:SetScript("OnEvent", function(_, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON then
@@ -1894,6 +1943,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     buildIndexes()
   elseif event == "PLAYER_LOGIN" then
     setPlayerBits()
+    scanProfessions()
     local ok, err = pcall(buildOptions)
     if not ok then say("|cffff5555options panel error:|r " .. tostring(err)) end
     ok, err = pcall(buildMinimapButton)
@@ -1905,6 +1955,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     say(("online (%s). /qh toggles the list, right-click the minimap bag for options."):format(version()))
     refresh()
   elseif event ~= "ADDON_LOADED" then
+    if event == "SKILL_LINES_CHANGED" then scanProfessions() end
     refresh()
   end
 end)
@@ -1950,6 +2001,10 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     say(("map functions: WorldMapFrame %s, OpenWorldMap %s, ToggleWorldMap %s, ShowQuestDetails %s, ToggleQuestLog %s, gamepad UI %s"):format(
       yn(WorldMapFrame), yn(OpenWorldMap), yn(ToggleWorldMap), yn(QuestMapFrame_ShowQuestDetails), yn(ToggleQuestLog),
       yn(InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled())))
+    local profs = {}
+    for id in pairs(knownProfs) do profs[#profs + 1] = PROFESSIONS[id][1] end
+    say(("your professions: %s (only-mine filter %s)"):format(#profs > 0 and table.concat(profs, ", ") or "none found",
+      tostring(opt("myProfOnly", false))))
     local n = 0
     for _ in pairs(active) do n = n + 1 end
     say(("quests in log: %d, quest-log items tracked: %d"):format(n, #activeItems))
