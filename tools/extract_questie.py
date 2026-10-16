@@ -67,7 +67,7 @@ PROF_SKILLS = {171, 164, 185, 333, 202, 129, 356, 182, 165, 186, 393, 197}
 # is for budding alchemists) get the NEGATIVE skill ID: "themed, not required".
 PROF_WORDS = [(171, r"\balchemist"), (164, r"\bblacksmith"), (333, r"\benchanter"), (202, r"\bengineer"),
               (165, r"\bleatherworker"), (197, r"\btailor"), (182, r"\bherbalist"), (186, r"\bminer\b"),
-              (356, r"\bfisherman\b"), (393, r"\bskinner\b"), (129, r"\bfirst aid\b"), (185, r"\bcooking\b")]
+              (356, r"\bfisherman\b|\bfishing\b|\bfish for\b"), (393, r"\bskinner\b"), (129, r"\bfirst aid\b"), (185, r"\bcooking\b")]
 
 # Blizzard files profession quests under a profession category ("sort") instead
 # of a zone; that's what puts them under a "Blacksmithing" header in the quest log.
