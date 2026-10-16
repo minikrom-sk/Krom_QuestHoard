@@ -423,14 +423,14 @@ local frame = CreateFrame("Frame", "Krom_QuestHoardFrame", UIParent,
 frame:SetSize(340, 60)
 frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
 frame:SetBackdrop({
-  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+  bgFile = "Interface\\Buttons\\WHITE8x8", -- solid fill: the tooltip texture is see-through by design
   edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
   tile = true, tileSize = 16, edgeSize = 16,
   insets = { left = 4, right = 4, top = 4, bottom = 4 },
 })
 frame:SetBackdropColor(0, 0, 0, 0.8)
 local function applyAlpha()
-  frame:SetBackdropColor(0, 0, 0, opt("bgAlpha", 0.8))
+  frame:SetBackdropColor(0.05, 0.05, 0.07, opt("bgAlpha", 0.8))
 end
 frame:SetClampedToScreen(true)
 frame:SetMovable(true)
@@ -609,12 +609,13 @@ end
 local picker = CreateFrame("Frame", nil, frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
 picker:SetFrameStrata("DIALOG")
 picker:SetBackdrop({
-  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+  bgFile = "Interface\\Buttons\\WHITE8x8", -- solid fill: the tooltip texture is see-through by design
   edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
   tile = true, tileSize = 16, edgeSize = 16,
   insets = { left = 4, right = 4, top = 4, bottom = 4 },
 })
-picker:SetBackdropColor(0.04, 0.04, 0.06, 1) -- always solid so the zone list stays readable
+picker:SetBackdropColor(0.06, 0.06, 0.08, 1) -- always solid so the zone list stays readable
+picker:EnableMouse(true) -- clicks on the list never fall through to the window behind it
 picker:Hide()
 frame:HookScript("OnHide", function() picker:Hide() end)
 
