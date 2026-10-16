@@ -577,34 +577,49 @@ grip:SetPoint("BOTTOMRIGHT", -3, 3)
 grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+-- Hand-rolled resizing: the window follows the mouse by exactly how far you
+-- drag, so a click without a drag changes nothing (StartSizing could creep).
 local sizing = false
-grip:SetScript("OnMouseDown", function()
-  if Krom_QuestHoardDB and Krom_QuestHoardDB.locked then return end
-  -- Pin the top-left corner first, so dragging the corner only moves the
-  -- bottom-right edge instead of stretching around the window's middle.
-  local left, top = frame:GetLeft(), frame:GetTop()
-  if left and top then
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+local function cursorPos()
+  local x, y = GetCursorPosition()
+  local sc = UIParent:GetEffectiveScale()
+  return x / sc, y / sc
+end
+local function startDrag(target, grip, minW, maxW, minH, maxH, onDone)
+  local left, top = target:GetLeft(), target:GetTop()
+  if not (left and top) then return end
+  target:ClearAllPoints()
+  target:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top) -- pin top-left
+  local sx, sy = cursorPos()
+  local w0, h0 = target:GetWidth(), target:GetHeight()
+  -- never past the right/bottom edge of the screen
+  maxW = math.min(maxW, (UIParent:GetRight() or 2000) - left - 4)
+  if maxH then maxH = math.min(maxH, top - (UIParent:GetBottom() or 0) - 4) end
+  grip:SetScript("OnUpdate", function()
+    local cx, cy = cursorPos()
+    target:SetWidth(math.max(minW, math.min(maxW, w0 + (cx - sx))))
+    if maxH then target:SetHeight(math.max(minH, math.min(maxH, h0 + (sy - cy)))) end
+  end)
+  grip.finish = function()
+    grip:SetScript("OnUpdate", nil)
+    grip.finish = nil
+    onDone()
   end
-  -- Never let the window be dragged past the screen's bottom/right edge.
-  local maxW = math.max(300, math.min(800, (UIParent:GetRight() or 2000) - (frame:GetLeft() or 0) - 4))
-  local maxH = math.max(110, math.min(1000, (frame:GetTop() or 1000) - (UIParent:GetBottom() or 0) - 4))
-  if frame.SetResizeBounds then frame:SetResizeBounds(300, 110, maxW, maxH)
-  elseif frame.SetMaxResize then frame:SetMaxResize(maxW, maxH) end
+end
+
+grip:SetScript("OnMouseDown", function(self)
+  if Krom_QuestHoardDB and Krom_QuestHoardDB.locked then return end
   sizing = true
-  frame:StartSizing("BOTTOMRIGHT")
+  startDrag(frame, self, 300, 800, 110, 1000, function()
+    sizing = false
+    Krom_QuestHoardDB.height = math.floor(frame:GetHeight() + 0.5)
+    Krom_QuestHoardDB.width = math.floor(frame:GetWidth() + 0.5)
+    local p, _, rp, x, y = frame:GetPoint()
+    Krom_QuestHoardDB.pos = { p, rp, x, y }
+    clampScroll()
+  end)
 end)
-grip:SetScript("OnMouseUp", function()
-  if not sizing then return end
-  frame:StopMovingOrSizing()
-  sizing = false
-  Krom_QuestHoardDB.height = math.floor(frame:GetHeight() + 0.5)
-  Krom_QuestHoardDB.width = math.floor(frame:GetWidth() + 0.5)
-  local p, _, rp, x, y = frame:GetPoint()
-  Krom_QuestHoardDB.pos = { p, rp, x, y }
-  clampScroll()
-end)
+grip:SetScript("OnMouseUp", function(self) if self.finish then self.finish() end end)
 -- One font for the window's lists, resizable from Options (/qh font).
 local listFont = CreateFont("Krom_QuestHoardListFont")
 listFont:CopyFontObject(GameFontHighlightSmall)
@@ -703,21 +718,37 @@ local function showInQuestLog(row)
     say(("%s isn't in your quest log yet%s."):format(q[Q_NAME], where))
     return
   end
-  if QuestMapFrame_OpenToQuestDetails then
-    pcall(QuestMapFrame_OpenToQuestDetails, qid)
+  -- Same approach as Questie: prefer the classic-style log (Forever has it),
+  -- fall back to the modern map quest log only if there isn't one.
+  if InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled() then
+    say("open the quest log with your controller (addons can't in controller mode).")
+    return
+  end
+  if InCombatLockdown and InCombatLockdown() then
+    say("can't open the quest log in combat.")
+    return
+  end
+  local questFrame = QuestLogExFrame or ClassicQuestLog or QuestLogFrame
+  if not questFrame then
+    if QuestMapFrame_OpenToQuestDetails then pcall(QuestMapFrame_OpenToQuestDetails, qid) end
     return
   end
   local idx = GetQuestLogIndexByID and GetQuestLogIndexByID(qid)
   if (not idx or idx == 0) and C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
     idx = C_QuestLog.GetLogIndexForQuestID(qid)
   end
-  if QuestLogFrame and idx and idx > 0 then
-    ShowUIPanel(QuestLogFrame)
-    if QuestLog_SetSelection then QuestLog_SetSelection(idx) end
-    if QuestLog_Update then QuestLog_Update() end
-  elseif ToggleQuestLog then
-    ToggleQuestLog()
+  if not idx or idx == 0 then return end
+  if C_QuestLog and C_QuestLog.SetSelectedQuest then pcall(C_QuestLog.SetSelectedQuest, qid)
+  elseif QuestLog_SetSelection then pcall(QuestLog_SetSelection, idx)
+  elseif SelectQuestLogEntry then pcall(SelectQuestLogEntry, idx) end
+  local bar = (QuestLogListScrollFrame and QuestLogListScrollFrame.ScrollBar) or QuestLogListScrollFrameScrollBar
+  if bar and bar.GetValueStep and bar.SetValue then
+    local step = bar:GetValueStep() or 0
+    pcall(bar.SetValue, bar, idx * step - step * 3)
   end
+  if not questFrame:IsShown() then ShowUIPanel(questFrame) end
+  if QuestLog_UpdateQuestDetails then pcall(QuestLog_UpdateQuestDetails) end
+  if QuestLog_Update then pcall(QuestLog_Update) end
 end
 
 -- Section collapse state (shared by both modes): db.collapsed[key] = true
@@ -846,22 +877,18 @@ local function fitCompactWidths()
   for _, row in ipairs(compactPool) do row:SetWidth(w - 4); row.fs:SetWidth(w - 4) end
 end
 local csizing = false
-cgrip:SetScript("OnMouseDown", function()
+cgrip:SetScript("OnMouseDown", function(self)
   if Krom_QuestHoardDB and Krom_QuestHoardDB.locked then return end
-  local l, t = compact:GetLeft(), compact:GetTop()
-  if l and t then compact:ClearAllPoints(); compact:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t) end
   csizing = true
-  compact:StartSizing("RIGHT")
+  startDrag(compact, self, 140, 500, nil, nil, function()
+    csizing = false
+    Krom_QuestHoardDB.cwidth = math.floor(compact:GetWidth() + 0.5)
+    local p, _, rp, x, y = compact:GetPoint()
+    Krom_QuestHoardDB.cpos = { p, rp, x, y }
+    if refresh then refresh() end
+  end)
 end)
-cgrip:SetScript("OnMouseUp", function()
-  if not csizing then return end
-  compact:StopMovingOrSizing()
-  csizing = false
-  Krom_QuestHoardDB.cwidth = math.floor(compact:GetWidth() + 0.5)
-  local p, _, rp, x, y = compact:GetPoint()
-  Krom_QuestHoardDB.cpos = { p, rp, x, y }
-  if refresh then refresh() end
-end)
+cgrip:SetScript("OnMouseUp", function(self) if self.finish then self.finish() end end)
 compact:SetScript("OnSizeChanged", fitCompactWidths)
 -- Reveal the grip while hovering anywhere on the list.
 compact:SetScript("OnUpdate", function(self, elapsed)
@@ -1386,6 +1413,15 @@ local function tagTooltip(tt)
   open = anyOpen
   if shown > MAX_TOOLTIP_QUESTS then
     tt:AddLine(("  |cff999999+%d more|r"):format(shown - MAX_TOOLTIP_QUESTS))
+  end
+  -- Bank stock (the game only knows your bank after you've opened it once).
+  if CountItem then
+    local okB, bags = pcall(CountItem, iid, false)
+    local okT, total = pcall(CountItem, iid, true)
+    local bank = (okB and okT) and ((tonumber(total) or 0) - (tonumber(bags) or 0)) or 0
+    if bank > 0 then
+      tt:AddLine(("|cffffb000QuestHoard:|r %d in your bank"):format(bank), 1, 1, 1)
+    end
   end
   if not open then
     local kind, ah, sell = verdict(iid)
