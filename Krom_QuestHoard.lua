@@ -736,14 +736,22 @@ local function showInQuestLog(row)
   end
   local questFrame = QuestLogExFrame or ClassicQuestLog or QuestLogFrame
   if not questFrame then
-    if QuestMapFrame_OpenToQuestDetails then pcall(QuestMapFrame_OpenToQuestDetails, qid) end
+    if QuestMapFrame_OpenToQuestDetails then
+      local ok, err = pcall(QuestMapFrame_OpenToQuestDetails, qid)
+      if not ok then say("couldn't open the quest log: " .. tostring(err)) end
+    else
+      say("couldn't find a quest log to open on this client.")
+    end
     return
   end
   local idx = GetQuestLogIndexByID and GetQuestLogIndexByID(qid)
   if (not idx or idx == 0) and C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
     idx = C_QuestLog.GetLogIndexForQuestID(qid)
   end
-  if not idx or idx == 0 then return end
+  if not idx or idx == 0 then
+    say(("couldn't find %s in the quest log (quest %d)."):format(q[Q_NAME] or "that quest", qid))
+    return
+  end
   if C_QuestLog and C_QuestLog.SetSelectedQuest then pcall(C_QuestLog.SetSelectedQuest, qid)
   elseif QuestLog_SetSelection then pcall(QuestLog_SetSelection, idx)
   elseif SelectQuestLogEntry then pcall(SelectQuestLogEntry, idx) end
@@ -752,7 +760,10 @@ local function showInQuestLog(row)
     local step = bar:GetValueStep() or 0
     pcall(bar.SetValue, bar, idx * step - step * 3)
   end
-  if not questFrame:IsShown() then ShowUIPanel(questFrame) end
+  if not questFrame:IsShown() then
+    local ok, err = pcall(ShowUIPanel, questFrame)
+    if not ok then say("couldn't open the quest log: " .. tostring(err)) end
+  end
   if QuestLog_UpdateQuestDetails then pcall(QuestLog_UpdateQuestDetails) end
   if QuestLog_Update then pcall(QuestLog_Update) end
 end
@@ -1897,6 +1908,23 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
       local st, n, total = cycleStyle(1)
       say(("window style %d of %d: %s - %s  (/qh style again for the next)"):format(n, total, st.name, st.desc or ""))
     end
+  elseif msg == "debug" then
+    local function yn(v) return v and "|cff55ff55yes|r" or "|cffff5555no|r" end
+    say("---- debug ----")
+    say(("mode: %s, compact quest log items: %s, quest log section: %s"):format(
+      isCompact() and "compact" or "full", tostring(opt("compactLog", false)), tostring(opt("showLog", true))))
+    say(("quest log frames: QuestLogFrame %s, ClassicQuestLog %s, QuestLogExFrame %s, QuestMapFrame_OpenToQuestDetails %s, C_QuestLog.GetLogIndexForQuestID %s"):format(
+      yn(QuestLogFrame), yn(ClassicQuestLog), yn(QuestLogExFrame), yn(QuestMapFrame_OpenToQuestDetails),
+      yn(C_QuestLog and C_QuestLog.GetLogIndexForQuestID)))
+    local n = 0
+    for _ in pairs(active) do n = n + 1 end
+    say(("quests in log: %d, quest-log items tracked: %d"):format(n, #activeItems))
+    for _, e in ipairs(activeItems) do
+      local qid = e.q and e.q[Q_ID] or 0
+      say(("  %s (item %s) - quest %d %s, in log %s, prof filter %s, hidden %s"):format(
+        e.name, tostring(e.iid), qid, e.quest or "?", yn(active[qid]), yn(passesFilter(e.q)), yn(isHidden(e.iid))))
+    end
+    say("---------------")
   elseif msg:match("^levels?") then
     local n = tonumber(msg:match("(%d+)"))
     if n then
