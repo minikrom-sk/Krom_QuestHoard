@@ -406,11 +406,11 @@ end
 
 -- "Too high for now" filter: quests more than 10 levels above you are skipped
 -- unless the "High level" box is ticked.
-local LEVEL_GAP = 10
+local LEVEL_GAP = 10 -- default; Options slider / /qh levels changes it (db.levelGap)
 local function levelOK(q)
   if opt("showHigh", false) then return true end
   local my = UnitLevel and UnitLevel("player") or 60
-  return (q[Q_LEVEL] or 0) <= my + LEVEL_GAP
+  return (q[Q_LEVEL] or 0) <= my + opt("levelGap", LEVEL_GAP)
 end
 
 -- Quests that still need the item, active ones first. Empty when all are done.
@@ -914,7 +914,7 @@ zoneBtn:SetPoint("TOPRIGHT", -10, -26)
 -- Filter row: show/hide normal quests and profession quests in the lists.
 
 local filterChecks = {}
-local function filterCheck(label, key, x, default)
+local function filterCheck(label, key, x, default, tip)
   local cb = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
   cb:SetSize(20, 20)
   local txt = frame:CreateFontString(nil, "OVERLAY")
@@ -925,16 +925,31 @@ local function filterCheck(label, key, x, default)
     Krom_QuestHoardDB[key] = self:GetChecked() and true or false
     if refresh then refresh() end
   end)
-  cb.key, cb.x, cb.default, cb.label = key, x, default, txt
+  cb.key, cb.x, cb.default, cb.label, cb.tip = key, x, default, txt, tip
+  cb:SetScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+    GameTooltip:AddLine(label .. (self:GetChecked() and "  |cff55ff55(on)|r" or "  |cff999999(off)|r"))
+    local t = type(self.tip) == "function" and self.tip() or self.tip
+    if t then GameTooltip:AddLine(t, 1, 1, 1, true) end
+    GameTooltip:Show()
+  end)
+  cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
   filterChecks[#filterChecks + 1] = cb
   return cb
 end
-filterCheck("Quest log", "showLog", 10, true)
-filterCheck("Normal", "showNormal", 0, true)
-filterCheck("Profession", "showProf", 0, true)
-filterCheck("Hidden", "showHidden", 0, false)
-filterCheck("Done", "showDone", 0, false)
-filterCheck("High level", "showHigh", 0, false)
+filterCheck("Quest log", "showLog", 10, true,
+  "Show the \"In your quest log\" section: items your current quests need, with progress.")
+filterCheck("Normal", "showNormal", 0, true,
+  "Show items for regular quests (anything that isn't a profession quest).")
+filterCheck("Profession", "showProf", 0, true,
+  "Show items for profession quests. Full-color icon = the quest requires that profession; dimmed icon = only themed around it, anyone can do it.")
+filterCheck("Hidden", "showHidden", 0, false,
+  "Show items you've right-click hidden, greyed out with (hidden). Right-click one again to unhide it.")
+filterCheck("Done", "showDone", 0, false,
+  "In the watch list, also show items whose quests you've already finished, greyed out with (done) - handy so you know not to keep them.")
+filterCheck("High level", "showHigh", 0, false, function()
+  return ("Show quests far above your level. When off, quests more than %d levels above you are hidden (change the number in Options)."):format(opt("levelGap", LEVEL_GAP))
+end)
 -- Lay the checkboxes out left to right by their label widths (fonts can change).
 -- Wraps onto a second row when the window is narrow. Returns rows used.
 local function placeFilters(y)
@@ -945,6 +960,7 @@ local function placeFilters(y)
     cb:ClearAllPoints()
     cb:SetPoint("TOPLEFT", x, y)
     cb:SetChecked(opt(cb.key, cb.default))
+    cb:SetHitRectInsets(0, -math.ceil(cb.label:GetStringWidth() or 40) - 2, 0, 0)
     x = x + w
   end
   return rows
@@ -1613,6 +1629,35 @@ local function buildOptions()
   end)
   y = y - 48
 
+  -- "High level" cut-off: hide quests more than N levels above you.
+  local lsl = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
+  lsl:SetOrientation("HORIZONTAL")
+  lsl:SetSize(220, 16)
+  lsl:SetPoint("TOPLEFT", 24, y - 18)
+  if lsl.SetBackdrop then
+    lsl:SetBackdrop({
+      bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+      edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+      tile = true, tileSize = 8, edgeSize = 8,
+      insets = { left = 3, right = 3, top = 6, bottom = 6 },
+    })
+  end
+  lsl:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+  lsl:SetMinMaxValues(1, 30)
+  lsl:SetValueStep(1)
+  if lsl.SetObeyStepOnDrag then lsl:SetObeyStepOnDrag(true) end
+  local lslLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+  lslLabel:SetPoint("BOTTOMLEFT", lsl, "TOPLEFT", 0, 3)
+  lsl:SetScript("OnValueChanged", function(_, v)
+    v = math.floor(v + 0.5)
+    lslLabel:SetText(("Hide quests more than %d levels above you%s"):format(v, v == LEVEL_GAP and " (default)" or ""))
+    if v ~= opt("levelGap", LEVEL_GAP) then
+      Krom_QuestHoardDB.levelGap = v
+      if refresh then refresh() end
+    end
+  end)
+  y = y - 48
+
   -- Style picker:  [<]  Style name  (3 of 12)  [>]   with a one-line description.
   local styleTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
   styleTitle:SetPoint("TOPLEFT", 20, y)
@@ -1684,7 +1729,7 @@ local function buildOptions()
   help:SetWidth(560) -- wrap inside the options panel instead of running off it
   if help.SetWordWrap then help:SetWordWrap(true) end
   help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh compact, /qh full,\n" ..
-               "/qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n\n" ..
+               "/qh style, /qh opacity 0-100, /qh font 8-18, /qh levels N, /qh learned\n\n" ..
                "Minimap button: left-click toggles the window, Shift-click switches full / compact,\nright-click opens these options.\n" ..
                "Items in the window: click = open in quest log, Shift-click = link in chat,\n" ..
                "Ctrl-click = search the Auction House, right-click = hide (tick 'Hidden' to unhide).")
@@ -1693,6 +1738,7 @@ local function buildOptions()
     for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
     sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8))
     fsl:SetValue(opt("fontSize", BASE_SIZE))
+    lsl:SetValue(opt("levelGap", LEVEL_GAP))
     chLabel()
     styleLabel()
   end)
@@ -1809,6 +1855,15 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     else
       local st, n, total = cycleStyle(1)
       say(("window style %d of %d: %s - %s  (/qh style again for the next)"):format(n, total, st.name, st.desc or ""))
+    end
+  elseif msg:match("^levels?") then
+    local n = tonumber(msg:match("(%d+)"))
+    if n then
+      Krom_QuestHoardDB.levelGap = math.max(1, math.min(60, n))
+      say(("hiding quests more than %d levels above you (tick 'High level' to show them)."):format(Krom_QuestHoardDB.levelGap))
+      refresh()
+    else
+      say(("currently hiding quests more than %d levels above you. /qh levels N to change."):format(opt("levelGap", LEVEL_GAP)))
     end
   elseif msg:match("^font") then
     local n = tonumber(msg:match("(%d+)"))

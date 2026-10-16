@@ -40,6 +40,7 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - `/qh style` cycle window styles (14 built-in looks; also arrows in Options)
 - `/qh opacity 0-100` window background opacity
 - `/qh font 8-18` window text size (`/qh font` resets)
+- `/qh levels N` hide quests more than N levels above you (default 10)
 - `/qh learned` list items the addon learned on its own
 
 ## Data
