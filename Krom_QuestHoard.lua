@@ -681,18 +681,18 @@ local function pickerEntries()
   local groups = groupedZones()
   local entries = {}
   if not pickerGroup then
-    entries[#entries + 1] = { label = "|cffffd100Current zone (auto)|r", pick = true }
+    entries[#entries + 1] = { label = C.header .. "Current zone (auto)|r", pick = true }
     for _, g in ipairs(GROUP_ORDER) do
       if groups[g] then
-        entries[#entries + 1] = { label = ("%s |cff999999(%d)  >|r"):format(g, #groups[g]), open = g }
+        entries[#entries + 1] = { label = ("%s " .. C.muted .. "(%d)  >|r"):format(g, #groups[g]), open = g }
       end
     end
   else
-    entries[#entries + 1] = { label = "|cff999999< Back|r", back = true }
-    entries[#entries + 1] = { label = "|cffffd100" .. pickerGroup .. "|r", header = true }
+    entries[#entries + 1] = { label = C.muted .. "< Back|r", back = true }
+    entries[#entries + 1] = { label = C.header .. pickerGroup .. "|r", header = true }
     for _, z in ipairs(groups[pickerGroup] or {}) do
       local lv = z.lo == z.hi and tostring(z.lo) or (z.lo .. "-" .. z.hi)
-      entries[#entries + 1] = { label = ("%s |cff999999(%s)|r"):format(z.name, lv), pick = true, name = z.name }
+      entries[#entries + 1] = { label = ("%s " .. C.muted .. "(%s)|r"):format(z.name, lv), pick = true, name = z.name }
     end
   end
   return entries
@@ -721,6 +721,8 @@ function showPicker()
     b:ClearAllPoints()
     b:SetPoint("TOPLEFT", 8 + col * COL_W, -8 - row * ROW_H)
     b:SetText(e.label)
+    if C.text == DARK_INK.text then b:GetFontString():SetTextColor(0.13, 0.09, 0.04)
+    else b:GetFontString():SetTextColor(1, 1, 1) end
     if e.header then
       b.hl:Hide(); b:SetScript("OnClick", nil)
     else
@@ -756,13 +758,39 @@ end)
 -- Window styles
 -- ---------------------------------------------------------------------------
 local BORDER = "Interface\\Tooltips\\UI-Tooltip-Border"
+-- Window styles. All Blizzard UI textures, so nothing to ship. Any the client
+-- doesn't have are skipped. light = pale background (dark ink text);
+-- tint darkens busy art so white text stays readable.
+local BROWN = { 0.55, 0.4, 0.2 }
 local STYLES = {
-  { key = "dark",       name = "Dark",           bg = "Interface\\Buttons\\WHITE8x8", tint = { 0.05, 0.05, 0.07 } },
-  { key = "dialog",     name = "Dialog",         bg = "Interface\\DialogFrame\\UI-DialogBox-Background", tile = 32 },
-  { key = "marble",     name = "Marble",         bg = "Interface\\FrameGeneral\\UI-Background-Marble", tile = 256 },
-  { key = "rock",       name = "Rock",           bg = "Interface\\FrameGeneral\\UI-Background-Rock", tile = 256 },
-  { key = "parchment",  name = "Parchment",      bg = "Interface\\QuestFrame\\QuestBG", light = true, border = { 0.55, 0.4, 0.2 } },
-  { key = "stationery", name = "Letter paper",   bg = "Interface\\Stationery\\StationeryTest1", light = true, border = { 0.55, 0.4, 0.2 } },
+  { key = "dark",       name = "Dark",               desc = "Plain solid dark. Clean and readable.",
+    bg = "Interface\\Buttons\\WHITE8x8", tint = { 0.05, 0.05, 0.07 } },
+  { key = "dialog",     name = "Dialog",             desc = "The black marble behind classic popup boxes.",
+    bg = "Interface\\DialogFrame\\UI-DialogBox-Background", tile = 32 },
+  { key = "marble",     name = "Marble",             desc = "Polished grey marble, used behind newer menus.",
+    bg = "Interface\\FrameGeneral\\UI-Background-Marble", tile = 256 },
+  { key = "rock",       name = "Rock",               desc = "Rough cave stone, used behind newer menus.",
+    bg = "Interface\\FrameGeneral\\UI-Background-Rock", tile = 256 },
+  { key = "stonebook",  name = "Stone tablet",       desc = "The stone page used for some in-game books.",
+    bg = "Interface\\ItemTextFrame\\ItemText-Stone-TopLeft", tint = { 0.6, 0.6, 0.6 } },
+  { key = "bronzebook", name = "Bronze plate",       desc = "The bronze page used for some in-game books.",
+    bg = "Interface\\ItemTextFrame\\ItemText-Bronze-TopLeft", tint = { 0.55, 0.55, 0.55 } },
+  { key = "marblebook", name = "White marble page",  desc = "The pale marble page used for some in-game books.",
+    bg = "Interface\\ItemTextFrame\\ItemText-Marble-TopLeft", light = true, border = BROWN },
+  { key = "spellbook",  name = "Spellbook page",     desc = "A page from your spellbook.",
+    bg = "Interface\\Spellbook\\Spellbook-Page-1", light = true, border = BROWN },
+  { key = "parchment",  name = "Quest parchment",    desc = "The quest log's paper (one picture, may stretch).",
+    bg = "Interface\\QuestFrame\\QuestBG", light = true, border = BROWN },
+  { key = "achieve",    name = "Achievement parchment", desc = "The achievement window's parchment.",
+    bg = "Interface\\AchievementFrame\\UI-Achievement-Parchment-Horizontal", light = true, border = BROWN },
+  { key = "stationery", name = "Letter paper",       desc = "Plain in-game mail paper.",
+    bg = "Interface\\Stationery\\StationeryTest1", light = true, border = BROWN },
+  { key = "journal",    name = "Dungeon journal",    desc = "The adventure guide's book background.",
+    bg = "Interface\\EncounterJournal\\UI-EJ-JournalBG", tint = { 0.5, 0.5, 0.5 } },
+  { key = "collections", name = "Collections",       desc = "The tile behind the mounts and pets window.",
+    bg = "Interface\\Collections\\CollectionsBackgroundTile", tile = 256 },
+  { key = "map",        name = "Westfall map",       desc = "A slice of the Westfall world map, darkened.",
+    bg = "Interface\\WorldMap\\Westfall\\Westfall1", tint = { 0.45, 0.45, 0.45 } },
 }
 local function availableStyles()
   local out = {}
@@ -805,17 +833,30 @@ local function applyStyle()
     for _, cb in ipairs(filterChecks) do cb.label:SetTextColor(1, 1, 1) end
     moreHint:SetTextColor(0.5, 0.5, 0.5)
   end
+  -- The zone list wears the same style, but always fully opaque.
+  picker:SetBackdrop({
+    bgFile = st.bg,
+    edgeFile = BORDER,
+    tile = st.tile ~= nil, tileSize = st.tile or 16, edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
+  })
+  local t = st.tint or { 1, 1, 1 }
+  if st.key == "dark" then t = { 0.06, 0.06, 0.08 } end
+  picker:SetBackdropColor(t[1], t[2], t[3], 1)
+  picker:SetBackdropBorderColor(b[1], b[2], b[3], 1)
+  if picker:IsShown() and showPicker then showPicker() end
   if refresh then refresh() end
 end
 
-local function cycleStyle()
+local function cycleStyle(dir)
   local list, cur = availableStyles(), currentStyle()
   local idx = 1
   for n, st in ipairs(list) do if st.key == cur.key then idx = n end end
-  local nxt = list[idx % #list + 1]
+  local nxt = list[(idx - 1 + (dir or 1)) % #list + 1]
   Krom_QuestHoardDB.style = nxt.key
+  Krom_QuestHoardDB.bgAlpha = nil -- each style starts at its own sensible opacity
   applyStyle()
-  return nxt
+  return nxt, (idx - 1 + (dir or 1)) % #list + 1, #list
 end
 
 function render()
@@ -1113,12 +1154,38 @@ local function buildOptions()
   end)
   y = y - 48
 
-  local styleBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  styleBtn:SetSize(240, 24)
-  styleBtn:SetPoint("TOPLEFT", 20, y)
-  local function styleLabel() styleBtn:SetText("Window style: " .. currentStyle().name .. "  (click to change)") end
-  styleBtn:SetScript("OnClick", function() cycleStyle(); styleLabel() end)
-  y = y - 34
+  -- Style picker:  [<]  Style name  (3 of 12)  [>]   with a one-line description.
+  local styleTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+  styleTitle:SetPoint("TOPLEFT", 20, y)
+  styleTitle:SetText("Window style")
+  local prevBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  prevBtn:SetSize(28, 22)
+  prevBtn:SetPoint("TOPLEFT", 20, y - 18)
+  prevBtn:SetText("<")
+  local styleName = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+  styleName:SetPoint("LEFT", prevBtn, "RIGHT", 10, 0)
+  styleName:SetWidth(230)
+  styleName:SetJustifyH("CENTER")
+  local nextBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  nextBtn:SetSize(28, 22)
+  nextBtn:SetPoint("LEFT", styleName, "RIGHT", 10, 0)
+  nextBtn:SetText(">")
+  local styleDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+  styleDesc:SetPoint("TOPLEFT", prevBtn, "BOTTOMLEFT", 0, -6)
+  styleDesc:SetJustifyH("LEFT")
+  local function styleLabel()
+    local list, cur, idx = availableStyles(), currentStyle(), 1
+    for n, st in ipairs(list) do if st.key == cur.key then idx = n end end
+    styleName:SetText(("%s  |cff999999(%d of %d)|r"):format(cur.name, idx, #list))
+    styleDesc:SetText(cur.desc or "")
+  end
+  local function step(dir)
+    cycleStyle(dir); styleLabel()
+    if sl then sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8)) end
+  end
+  prevBtn:SetScript("OnClick", function() step(-1) end)
+  nextBtn:SetScript("OnClick", function() step(1) end)
+  y = y - 66
 
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   reset:SetSize(180, 24)
@@ -1236,12 +1303,14 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     if want then
       local found
       for _, st in ipairs(availableStyles()) do
-        if st.key == want or st.name:lower():find(want, 1, true) then found = st end
+        if st.key == want then found = st; break end
+        if not found and st.name:lower():find(want, 1, true) then found = st end
       end
       if found then Krom_QuestHoardDB.style = found.key; applyStyle(); say("window style: " .. found.name .. ".")
       else say("unknown style. Try: /qh style (cycles through them).") end
     else
-      say("window style: " .. cycleStyle().name .. ". /qh style again for the next one.")
+      local st, n, total = cycleStyle(1)
+      say(("window style %d of %d: %s - %s  (/qh style again for the next)"):format(n, total, st.name, st.desc or ""))
     end
   elseif msg:match("^opacity") then
     local n = tonumber(msg:match("(%d+)"))

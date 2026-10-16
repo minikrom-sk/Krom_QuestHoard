@@ -30,7 +30,7 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - `/qh reset` reset the window size and position
 - `/qh options` open the settings panel
 - `/qh minimap` show/hide the minimap button
-- `/qh style` cycle window styles (Dark, Dialog, Marble, Rock, Parchment, Letter paper)
+- `/qh style` cycle window styles (14 built-in looks; also arrows in Options)
 - `/qh opacity 0-100` window background opacity
 - `/qh learned` list items the addon learned on its own
 
