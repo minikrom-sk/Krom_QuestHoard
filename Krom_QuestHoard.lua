@@ -315,6 +315,12 @@ local function learn(lname, name, questID, title)
   db.learned[lname] = e
 end
 
+-- Item ID from its name, if the client has seen the item (bags, bank, cache).
+local function idFromName(name)
+  local ok, _, link = pcall(GetInfo, name)
+  return ok and type(link) == "string" and tonumber(link:match("item:(%d+)")) or nil
+end
+
 local function scan()
   wipe(active); wipe(progress); wipe(activeItems)
   forEachQuest(function(title, questID, index, header)
@@ -344,7 +350,7 @@ local function scan()
             tradeable = learnedEntry.tradeable
           end
           if tradeable then
-            activeItems[#activeItems + 1] = { iid = nameIndex[lname] or (learnedEntry and learnedEntry.itemID),
+            activeItems[#activeItems + 1] = { iid = nameIndex[lname] or (learnedEntry and learnedEntry.itemID) or idFromName(name),
                                               name = name, have = have, need = need, quest = title,
                                               q = (questID and questIndex[questID]) or { questID or 0, title, 0, "", 0, 0, 0, 0, 0, 0 },
                                               done = o.finished or have >= need }
@@ -784,9 +790,9 @@ local function makePool(parent, fontObj, widthFn)
       row:SetScript("OnClick", function(self, button)
         if self.collapseKey and button == "LeftButton" then toggleCollapsed(self.collapseKey)
         elseif button == "RightButton" and self.iid then toggleHidden(self.iid)
-        elseif button == "LeftButton" and self.iid then
-          if IsShiftKeyDown() then linkInChat(self)
-          elseif IsControlKeyDown() then searchAH(self)
+        elseif button == "LeftButton" and (self.iid or self.quest) then
+          if self.iid and IsShiftKeyDown() then linkInChat(self)
+          elseif self.iid and IsControlKeyDown() then searchAH(self)
           else showInQuestLog(self) end
         end
       end)
@@ -1299,13 +1305,25 @@ function render()
   local wantDone = opt("showDone", false)
   -- When the quest-log section isn't shown, its items appear here instead.
   local wantActive = not showLog
+  -- With the quest-log section hidden (e.g. compact), list every quest-log item
+  -- here, whatever zone its quest is in, with live progress.
+  if wantActive then
+    for _, e in ipairs(activeItems) do
+      local key = e.iid or e.name
+      if not seen[key] and passesFilter(e.q) then
+        seen[key] = true
+        watch[#watch + 1] = { iid = e.iid, name = e.name, quest = e.q, active = true,
+                              have = e.have, need = e.need, finished = e.done }
+      end
+    end
+  end
   for z in pairs(zones) do
     for _, pair in ipairs(zoneIndex[z] or {}) do
       local iid, q = pair[1], pair[2]
       local st = questState(q[Q_ID])
       if not seen[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
          and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3) and passesFilter(q) and levelOK(q)
-         and (st == "todo" or (st == "done" and wantDone) or (st == "active" and wantActive)) then
+         and (st == "todo" or (st == "done" and wantDone)) then
         if sellable(iid) then
           seen[iid] = true
           watch[#watch + 1] = { iid = iid, name = ns.items[iid][1], quest = q, done = st == "done" }
@@ -1313,10 +1331,20 @@ function render()
       end
     end
   end
-  table.sort(watch, function(a, b) return a.quest[Q_LEVEL] < b.quest[Q_LEVEL] end)
+  table.sort(watch, function(a, b)
+    if (a.active or false) ~= (b.active or false) then return a.active and true or false end
+    return (a.quest[Q_LEVEL] or 0) < (b.quest[Q_LEVEL] or 0)
+  end)
   section("watch", picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
+    if e.active then
+      local c = e.finished and C.good or C.text
+      if compactMode then
+        return ("%s%s %s%d/%d|r"):format(profIcon(q), e.name, c, e.have, e.need), "For: " .. (q[Q_NAME] or "")
+      end
+      return ("%s%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(profIcon(q), e.name, c, e.have, e.need, q[Q_NAME] or "")
+    end
     if e.done then
       return ("%s%s%s  (done)|r"):format(C.hidden, e.name, compactMode and "" or ("  " .. q[Q_NAME])), questNote(q, need)
     end
@@ -1527,8 +1555,17 @@ local LDB = LibStub and LibStub("LibDataBroker-1.1", true)
 
 local optionsPanel, optionsCategory
 local function buildOptions()
-  local panel = CreateFrame("Frame")
-  panel.name = "Krom QuestHoard"
+  -- The registered page is a container with a scroll area; everything below
+  -- is drawn on "panel", the scrolling content, so nothing spills off the page.
+  local container = CreateFrame("Frame")
+  container.name = "Krom QuestHoard"
+  local sf = CreateFrame("ScrollFrame", nil, container, "UIPanelScrollFrameTemplate")
+  sf:SetPoint("TOPLEFT", 0, -4)
+  sf:SetPoint("BOTTOMRIGHT", -28, 4)
+  local panel = CreateFrame("Frame", nil, sf)
+  panel:SetSize(600, 900)
+  sf:SetScrollChild(panel)
+  panel.name = container.name
 
   local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
   title:SetPoint("TOPLEFT", 16, -16)
@@ -1734,7 +1771,11 @@ local function buildOptions()
                "Items in the window: click = open in quest log, Shift-click = link in chat,\n" ..
                "Ctrl-click = search the Auction House, right-click = hide (tick 'Hidden' to unhide).")
 
-  panel:SetScript("OnShow", function()
+  -- Content height = everything above plus the help text.
+  panel:SetHeight(-(y - 48) + (help:GetStringHeight() or 80) + 30)
+  container:SetScript("OnSizeChanged", function(self) panel:SetWidth(math.max(400, (self:GetWidth() or 600) - 32)) end)
+
+  container:SetScript("OnShow", function()
     for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
     sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8))
     fsl:SetValue(opt("fontSize", BASE_SIZE))
@@ -1744,12 +1785,12 @@ local function buildOptions()
   end)
 
   if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
-    optionsCategory = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+    optionsCategory = Settings.RegisterCanvasLayoutCategory(container, container.name)
     Settings.RegisterAddOnCategory(optionsCategory)
   elseif InterfaceOptions_AddCategory then
-    InterfaceOptions_AddCategory(panel)
+    InterfaceOptions_AddCategory(container)
   end
-  optionsPanel = panel
+  optionsPanel = container
 end
 
 local function openOptions()
