@@ -3,4 +3,5 @@ package-as: Krom_QuestHoard
 ignore:
   - README.md
   - VERSION
+  - CLAUDE.md
   - tools
