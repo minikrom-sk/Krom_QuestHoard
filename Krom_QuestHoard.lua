@@ -662,7 +662,6 @@ local function makePool(parent, fontObj, widthFn)
         elseif self.iid then
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
           GameTooltip:SetHyperlink("item:" .. self.iid)
-          if self.note then GameTooltip:AddLine(self.note, 1, 0.82, 0) end
           GameTooltip:AddLine(isHidden(self.iid) and "|cff999999Right-click: unhide|r" or "|cff999999Right-click: hide from QuestHoard|r")
           GameTooltip:Show()
         end
@@ -1202,6 +1201,20 @@ end
 -- Tooltip tags
 -- ---------------------------------------------------------------------------
 local MAX_TOOLTIP_QUESTS = 4
+-- Quest level colored like the game colors quest difficulty, relative to you.
+local function levelColor(level)
+  if GetQuestDifficultyColor then
+    local ok, c = pcall(GetQuestDifficultyColor, level)
+    if ok and type(c) == "table" and c.r then
+      return ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255)
+    end
+  end
+  local d = level - (UnitLevel and UnitLevel("player") or level)
+  if d >= 5 then return "|cffff1a1a" elseif d >= 3 then return "|cffff8040"
+  elseif d >= -2 then return "|cffffff00" elseif d >= -8 then return "|cff40c040" end
+  return "|cff808080"
+end
+
 local function tagTooltip(tt)
   if not tt or not tt.GetItem then return end
   local ok, name, link = pcall(tt.GetItem, tt)
@@ -1215,21 +1228,27 @@ local function tagTooltip(tt)
 
   local open = openQuests(qs)
   local shown = #open
+  if shown > 0 then
+    tt:AddLine("|cffffb000QuestHoard - keep for:|r")
+  end
   for n, q in ipairs(open) do
     if n > MAX_TOOLTIP_QUESTS then break end
+    local prof = profInfo(q) and (" " .. profIcon(q)) or ""
     if active[q[Q_ID]] then
       local p = lname and progress[q[Q_ID] .. ":" .. lname]
-      tt:AddLine(("|cffffb000QuestHoard: KEEP|r %s%s"):format(q[Q_NAME], p and (" " .. p.have .. "/" .. p.need) or ""))
+      tt:AddLine(("  %s%s|r%s"):format(p and (p.have .. "/" .. p.need .. " ") or "", q[Q_NAME], prof), 1, 1, 1)
     else
-      local where = (q[Q_LEVEL] or 0) > 0 and (" (%s, lvl %d)"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
-      local prof = profName(q) and (" " .. profIcon(q) .. "|cff999999" .. profName(q) .. "|r") or ""
-      local need = (q[Q_NEED] or 0) > 0 and (q[Q_NEED] .. " ") or ""
-      tt:AddLine(("|cffffb000QuestHoard: KEEP|r %sfor %s%s%s"):format(need, q[Q_NAME], where, prof))
+      local need = (q[Q_NEED] or 0) > 0 and (q[Q_NEED] .. "x ") or ""
+      local where = ""
+      if (q[Q_LEVEL] or 0) > 0 then
+        where = (" |cff999999(%s|r %s%d|r|cff999999)|r"):format(q[Q_ZONE], levelColor(q[Q_LEVEL]), q[Q_LEVEL])
+      end
+      tt:AddLine(("  %s%s%s%s"):format(need, q[Q_NAME], where, prof), 1, 1, 1)
     end
   end
   open = shown > 0
   if shown > MAX_TOOLTIP_QUESTS then
-    tt:AddLine(("|cff999999QuestHoard: +%d more quests|r"):format(shown - MAX_TOOLTIP_QUESTS))
+    tt:AddLine(("  |cff999999+%d more|r"):format(shown - MAX_TOOLTIP_QUESTS))
   end
   if not open then
     local kind, ah, sell = verdict(iid)
