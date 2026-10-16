@@ -20,6 +20,23 @@ def run_file(path):
 
 quests = run_file(f"{COMBINED}/foreverQuestDB.lua")
 items = run_file(f"{COMBINED}/foreverItemDB.lua")
+npcs = run_file(f"{COMBINED}/foreverNpcDB.lua")
+objects = run_file(f"{COMBINED}/foreverObjectDB.lua")
+
+def giver_zone(starters, enders):
+    """Zone of whoever starts (or failing that, ends) the quest: NPC or object."""
+    for grp in (starters, enders):
+        if grp is None:
+            continue
+        for slot, db, zkey in ((1, npcs, 9), (2, objects, 5)):
+            ids = grp[slot]
+            if ids is None:
+                continue
+            for i in range(1, len(ids) + 1):
+                e = db[ids[i]]
+                if e is not None and (e[zkey] or 0) > 0:
+                    return e[zkey]
+    return 0
 
 # Zone names: parse  [40]="Westfall",  lines out of Questie's lookup file.
 zone_names = {}
@@ -52,9 +69,15 @@ PROF_WORDS = [(171, r"\balchemist"), (164, r"\bblacksmith"), (333, r"\benchanter
               (165, r"\bleatherworker"), (197, r"\btailor"), (182, r"\bherbalist"), (186, r"\bminer\b"),
               (356, r"\bfisherman\b"), (393, r"\bskinner\b"), (129, r"\bfirst aid\b"), (185, r"\bcooking\b")]
 
-def profession(skill, name, text):
+# Blizzard files profession quests under a profession category ("sort") instead
+# of a zone; that's what puts them under a "Blacksmithing" header in the quest log.
+SORT_PROF = {-121: 164, -181: 171, -182: 165, -201: 202, -264: 197, -304: 185, -324: 129, -101: 356, -24: 182}
+
+def profession(skill, name, text, sort=0):
     if skill in PROF_SKILLS:
         return skill
+    if sort in SORT_PROF:
+        return SORT_PROF[sort]
     hay = (name + " " + text).lower()
     for sid, pat in PROF_WORDS:
         if re.search(pat, hay):
@@ -91,6 +114,11 @@ for qid, q in quests.items():
     req_level = int(q[4] or 0)
     skill = int(q[18][1]) if q[18] is not None and q[18][1] is not None else 0
     zone = q[17] or 0
+    sort = zone if zone < 0 else 0
+    if zone <= 0:
+        # Category quests (professions, war effort, class...): use the zone the
+        # quest-giver stands in.
+        zone = giver_zone(q[2], q[3])
     zname = zone_names.get(zone, "Other") if zone > 0 else "Other"
     races = int(q[6] or 0) & 0xFFFFFFFF   # low 32 bits = race bitmask; 0 = everyone
     classes = int(q[7] or 0) & 0xFFFFFFFF
@@ -108,7 +136,7 @@ for qid, q in quests.items():
         e = out.setdefault(iid, {"name": it[1], "quests": [], "vendor": it[14] is not None and len(it[14]) > 0})
         text = " ".join(t for t in lst(q[8]) if t) if q[8] is not None else ""
         need = count_in_text(text, it[1]) or 0
-        prof = profession(skill, q[1], text)
+        prof = profession(skill, q[1], text, sort)
         e["quests"].append((int(qid), q[1], int(q[5] or 0), zname, races, classes, req_level, skill, need, prof))
 
 def s(x):

@@ -62,8 +62,15 @@ local PROFESSIONS = {
 }
 -- Q_PROF > 0: the quest REQUIRES that profession. Q_PROF < 0: the quest is
 -- only themed around it (open to anyone), shown with a dimmed icon.
+-- Profession quests seen under a profession header in your quest log
+-- (Blizzard's own grouping, so it beats any guess). questID -> skill ID.
+local liveProf = {}
 local function profInfo(q)
   local id = q and q[Q_PROF] or 0
+  if q and id <= 0 then
+    local db = Krom_QuestHoardDB
+    id = liveProf[q[Q_ID]] or (db and db.profQuests and db.profQuests[q[Q_ID]]) or id
+  end
   local p = PROFESSIONS[math.abs(id)]
   return p, id < 0
 end
@@ -209,10 +216,24 @@ end
 -- ---------------------------------------------------------------------------
 local nameIndex = {}   -- lowercase item name -> itemID
 local zoneIndex = {}   -- zone name -> { {itemID, questRow}, ... }
+local questIndex = {}  -- questID -> quest record (for profession/zone lookups)
+local profByName = {}  -- lowercase profession name -> skill ID (quest-log headers)
+for id, p in pairs(PROFESSIONS) do profByName[p[1]:lower()] = id end
+-- Localized names, so headers match on non-English clients too.
+if GetSpellInfo then
+  local spells = { [171] = 2259, [164] = 2018, [185] = 2550, [333] = 7411, [202] = 4036, [129] = 3273,
+                   [356] = 7620, [182] = 2366, [165] = 2108, [186] = 2575, [393] = 8613, [197] = 3908 }
+  for id, spell in pairs(spells) do
+    local ok, n = pcall(GetSpellInfo, spell)
+    if ok and type(n) == "string" then profByName[n:lower()] = id end
+  end
+end
+
 local function buildIndexes()
   for iid, row in pairs(ns.items) do
     nameIndex[row[1]:lower()] = iid
     for _, q in ipairs(row[2]) do
+      questIndex[q[Q_ID]] = questIndex[q[Q_ID]] or q
       local z = q[Q_ZONE]
       zoneIndex[z] = zoneIndex[z] or {}
       table.insert(zoneIndex[z], { iid, q })
@@ -236,16 +257,20 @@ local function parseObjective(text)
   if name then return name, tonumber(have), tonumber(need) end
 end
 
+-- Calls cb(title, questID, logIndex, headerName) for each quest in your log.
 local function forEachQuest(cb)
+  local header
   if C_QuestLog and C_QuestLog.GetInfo and C_QuestLog.GetNumQuestLogEntries then
     for i = 1, (C_QuestLog.GetNumQuestLogEntries() or 0) do
       local info = C_QuestLog.GetInfo(i)
-      if info and not info.isHeader and info.title then cb(info.title, info.questID, i) end
+      if info and info.isHeader then header = info.title
+      elseif info and info.title then cb(info.title, info.questID, i, header) end
     end
   elseif GetNumQuestLogEntries and GetQuestLogTitle then
     for i = 1, (GetNumQuestLogEntries() or 0) do
       local title, _, _, isHeader, _, _, _, questID = GetQuestLogTitle(i)
-      if title and not isHeader then cb(title, questID, i) end
+      if isHeader then header = title
+      elseif title then cb(title, questID, i, header) end
     end
   end
 end
@@ -282,8 +307,14 @@ end
 
 local function scan()
   wipe(active); wipe(progress); wipe(activeItems)
-  forEachQuest(function(title, questID, index)
+  forEachQuest(function(title, questID, index, header)
     if questID then active[questID] = true end
+    local hp = header and profByName[header:lower()]
+    if questID and hp then
+      liveProf[questID] = hp
+      local db = Krom_QuestHoardDB
+      if db then db.profQuests = db.profQuests or {}; db.profQuests[questID] = hp end
+    end
     for _, o in ipairs(getObjectives(questID, index)) do
       if o.type == "item" then
         local name, have, need = parseObjective(o.text)
@@ -305,6 +336,7 @@ local function scan()
           if tradeable then
             activeItems[#activeItems + 1] = { iid = nameIndex[lname] or (learnedEntry and learnedEntry.itemID),
                                               name = name, have = have, need = need, quest = title,
+                                              q = (questID and questIndex[questID]) or { questID or 0, title, 0, "", 0, 0, 0, 0, 0, 0 },
                                               done = o.finished or have >= need }
           end
         end
@@ -907,7 +939,7 @@ function render()
   -- 1. Items your active quests want
   section("In your quest log", activeItems, function(e)
     local c = e.done and C.good or C.text
-    return ("%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(e.name, c, e.have, e.need, e.quest)
+    return ("%s%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(profIcon(e.q), e.name, c, e.have, e.need, e.quest)
   end)
 
   -- 2. In your bags, still needed by a quest you haven't done
