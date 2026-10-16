@@ -10,6 +10,7 @@ import re, sys
 import lupa
 
 COMBINED, ZONES_LUA, OUT = sys.argv[1:4]
+GROUPS = {1: "Eastern Kingdoms", 2: "Kalimdor", 8: "Zephras Isle", 9: "Dungeons & raids", 10: "Battlegrounds"}
 QUEST_CLASS, MISC_CLASS, MOUNT_SUB = 12, 15, 5
 
 L = lupa.LuaRuntime(unpack_returned_tuples=True)
@@ -25,15 +26,40 @@ zone_names = {}
 for m in re.finditer(r'\[(\d+)\]="((?:[^"\\]|\\.)*)"', open(ZONES_LUA, encoding="utf-8").read()):
     zone_names.setdefault(int(m.group(1)), m.group(2).replace('\\"', '"'))
 
+# Zone -> continent group, from Questie's zone categories.
+L.execute('''
+l10n = {}
+local exp = setmetatable({Current = 1, Era = 1, Tbc = 2, Wotlk = 3, Cata = 4, MoP = 5}, {__index = function() return false end})
+QuestieLoader = { ImportModule = function(_, name) if name == "l10n" then return l10n end return exp end }
+''')
+L.execute(open(ZONES_LUA, encoding="utf-8").read())
+zone_group = {}
+_cats = L.eval("l10n.zoneCategoryLookup")
+for gid, gname in GROUPS.items():
+    t = _cats[gid]
+    if t is not None:
+        for k in t:
+            zone_group.setdefault(t[k], gname)
+
 def lst(t):
     return [t[i] for i in range(1, len(t) + 1)] if t is not None else []
 
 PROF_SKILLS = {171, 164, 185, 333, 202, 129, 356, 182, 165, 186, 393, 197}
-# Only a real profession requirement counts. (Checked on Wowhead: Forever's
-# "My First Alchemy Set" is alchemy-themed but open to everyone, so guessing
-# from quest text would mislabel quests as profession-only.)
+# A real profession requirement gives the skill ID. Quests that merely mention a
+# profession's trainer (Forever's "My First Alchemy Set" is open to everyone but
+# is for budding alchemists) get the NEGATIVE skill ID: "themed, not required".
+PROF_WORDS = [(171, r"\balchemist"), (164, r"\bblacksmith"), (333, r"\benchanter"), (202, r"\bengineer"),
+              (165, r"\bleatherworker"), (197, r"\btailor"), (182, r"\bherbalist"), (186, r"\bminer\b"),
+              (356, r"\bfisherman\b"), (393, r"\bskinner\b"), (129, r"\bfirst aid\b"), (185, r"\bcooking\b")]
+
 def profession(skill, name, text):
-    return skill if skill in PROF_SKILLS else 0
+    if skill in PROF_SKILLS:
+        return skill
+    hay = (name + " " + text).lower()
+    for sid, pat in PROF_WORDS:
+        if re.search(pat, hay):
+            return -sid
+    return 0
 
 WORDNUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
            "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20}
@@ -100,10 +126,16 @@ for iid in sorted(out):
     qs = ", ".join("{%d,%s,%d,%s,%d,%d,%d,%d,%d,%d}" % (a, s(b), c, s(d), r, k, rl, sk, n, pf) for a, b, c, d, r, k, rl, sk, n, pf in sorted(e["quests"], key=lambda t: (t[2], t[0])))
     lines.append("[%d]={%s,{%s}%s}," % (iid, s(e["name"]), qs, ",true" if e["vendor"] else ""))
 lines.append("}")
+used = sorted({q[3] for e in out.values() for q in e["quests"]})
+lines.append("ns.zoneGroup = {")
+for z in used:
+    lines.append("[%s]=%s," % (s(z), s(zone_group.get(z, "Other"))))
+lines.append("}")
 open(OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 
 links=[q for e in out.values() for q in e["quests"]]
-print(f"profession-tagged links: {sum(1 for q in links if q[9])}")
+print(f"profession links: required {sum(1 for q in links if q[9] > 0)}, themed {sum(1 for q in links if q[9] < 0)}")
+print("zone groups:", {g: sum(1 for z in used if zone_group.get(z, "Other") == g) for g in set(list(GROUPS.values()) + ["Other"])})
 print(f"counts found for {sum(1 for q in links if q[8])} of {len(links)} quest links")
 print(f"vendor-sold: {sum(1 for e in out.values() if e['vendor'])}")
 print(f"kept {len(out)} tradeable items across {sum(len(e['quests']) for e in out.values())} quest links; skipped {skipped} mount links")
