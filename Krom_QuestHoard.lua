@@ -649,44 +649,47 @@ local function pickZone(name)
   refresh()
 end
 
-local COL_W, ROW_H, MAX_ROWS = 175, 16, 24
+local COL_W, ROW_H, MAX_ROWS = 180, 16, 20
 local GROUP_ORDER = { "Eastern Kingdoms", "Kalimdor", "Zephras Isle", "Dungeons & raids", "Battlegrounds", "Other" }
-local function showPicker()
-  -- Build columns: each continent starts a new column (spilling into more
-  -- columns if long); the small groups stack together in the last column.
+local pickerGroup -- nil = top-level menu, otherwise the group being browsed
+
+local function groupedZones()
   local groups = {}
   for _, z in ipairs(getZoneChoices()) do
     local g = (ns.zoneGroup and ns.zoneGroup[z.name]) or "Other"
     groups[g] = groups[g] or {}
     table.insert(groups[g], z)
   end
-  local cells, col, row = {}, 0, 0
-  local function put(e)
-    if row >= MAX_ROWS then col, row = col + 1, 0 end
-    cells[#cells + 1] = { e = e, col = col, row = row }
-    row = row + 1
-  end
-  put({ label = "|cffffd100Current zone (auto)|r", auto = true })
-  local maxRow = 0
-  for gi, g in ipairs(GROUP_ORDER) do
-    local list = groups[g]
-    if list then
-      local major = (g == "Eastern Kingdoms" or g == "Kalimdor")
-      if row > 0 and (major or gi == 3 or row + 2 > MAX_ROWS) then
-        maxRow = math.max(maxRow, row); col, row = col + 1, 0
-      elseif row > 0 then
-        row = row + 1 -- a little gap between stacked groups
-      end
-      put({ label = "|cffffd100" .. g .. "|r", header = true })
-      for _, z in ipairs(list) do
-        local lv = z.lo == z.hi and tostring(z.lo) or (z.lo .. "-" .. z.hi)
-        put({ name = z.name, label = ("%s |cff999999(%s)|r"):format(z.name, lv) })
+  return groups
+end
+
+local showPicker
+local function pickerEntries()
+  local groups = groupedZones()
+  local entries = {}
+  if not pickerGroup then
+    entries[#entries + 1] = { label = "|cffffd100Current zone (auto)|r", pick = true }
+    for _, g in ipairs(GROUP_ORDER) do
+      if groups[g] then
+        entries[#entries + 1] = { label = ("%s |cff999999(%d)  >|r"):format(g, #groups[g]), open = g }
       end
     end
+  else
+    entries[#entries + 1] = { label = "|cff999999< Back|r", back = true }
+    entries[#entries + 1] = { label = "|cffffd100" .. pickerGroup .. "|r", header = true }
+    for _, z in ipairs(groups[pickerGroup] or {}) do
+      local lv = z.lo == z.hi and tostring(z.lo) or (z.lo .. "-" .. z.hi)
+      entries[#entries + 1] = { label = ("%s |cff999999(%s)|r"):format(z.name, lv), pick = true, name = z.name }
+    end
   end
-  maxRow = math.max(maxRow, row)
-  local cols = col + 1
-  for n, c in ipairs(cells) do
+  return entries
+end
+
+function showPicker()
+  local entries = pickerEntries()
+  local cols = math.ceil(#entries / MAX_ROWS)
+  local rows = math.ceil(#entries / cols)
+  for n, e in ipairs(entries) do
     local b = pickerButtons[n]
     if not b then
       b = CreateFrame("Button", nil, picker)
@@ -701,24 +704,38 @@ local function showPicker()
       b.hl = hl
       pickerButtons[n] = b
     end
+    local col, row = math.floor((n - 1) / rows), (n - 1) % rows
     b:ClearAllPoints()
-    b:SetPoint("TOPLEFT", 8 + c.col * COL_W, -8 - c.row * ROW_H)
-    b:SetText(c.e.label)
-    if c.e.header then
+    b:SetPoint("TOPLEFT", 8 + col * COL_W, -8 - row * ROW_H)
+    b:SetText(e.label)
+    if e.header then
       b.hl:Hide(); b:SetScript("OnClick", nil)
     else
-      b.hl:Show(); b:SetScript("OnClick", function() pickZone(c.e.name) end)
+      b.hl:Show()
+      b:SetScript("OnClick", function()
+        if e.open then pickerGroup = e.open; showPicker()
+        elseif e.back then pickerGroup = nil; showPicker()
+        elseif e.pick then pickerGroup = nil; pickZone(e.name) end
+      end)
     end
     b:Show()
   end
-  for n = #cells + 1, #pickerButtons do pickerButtons[n]:Hide() end
-  picker:SetSize(cols * COL_W + 16, maxRow * ROW_H + 16)
+  for n = #entries + 1, #pickerButtons do pickerButtons[n]:Hide() end
+  picker:SetSize(cols * COL_W + 16, rows * ROW_H + 16)
+  -- Open toward the middle of the screen, and never off its edge.
   picker:ClearAllPoints()
-  picker:SetPoint("TOPLEFT", zoneBtn, "BOTTOMLEFT", 0, -2)
+  local mid = (UIParent:GetWidth() or 0) / 2
+  local x = zoneBtn:GetCenter()
+  if x and x > mid then
+    picker:SetPoint("TOPRIGHT", zoneBtn, "BOTTOMRIGHT", 0, -2)
+  else
+    picker:SetPoint("TOPLEFT", zoneBtn, "BOTTOMLEFT", 0, -2)
+  end
   picker:Show()
 end
+picker:SetClampedToScreen(true)
 zoneBtn:SetScript("OnClick", function()
-  if picker:IsShown() then picker:Hide() else showPicker() end
+  if picker:IsShown() then picker:Hide() else pickerGroup = nil; showPicker() end
 end)
 
 
