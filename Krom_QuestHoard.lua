@@ -637,6 +637,89 @@ local function toggleHidden(iid)
   if refresh then refresh() end
 end
 
+-- ---------------------------------------------------------------------------
+-- Row click actions: left = quest log, shift = link in chat, ctrl = AH search
+-- ---------------------------------------------------------------------------
+local LINK_CHANNELS = { "PARTY", "SAY", "GUILD", "RAID", "YELL" }
+local CHANNEL_NAMES = { PARTY = "Party", SAY = "Say", GUILD = "Guild", RAID = "Raid", YELL = "Yell" }
+
+local function itemLink(iid)
+  local name, link = itemInfo(iid)
+  return link or (name and ("[" .. name .. "]")) or ("item " .. iid)
+end
+
+-- Shift-click: link the item in chat. If a chat box is open, drop it in there
+-- (normal WoW behavior); otherwise send to the chosen channel.
+local function linkInChat(row)
+  local link = itemLink(row.iid)
+  local q = row.quest
+  local need = q and (q[Q_NEED] or 0) or 0
+  local msg = link .. " - have " .. owned(row.iid) .. (need > 0 and ("/" .. need) or "")
+  if q and q[Q_NAME] then msg = msg .. " (" .. q[Q_NAME] .. ")" end
+  local editBox = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+  if editBox and ChatEdit_InsertLink then ChatEdit_InsertLink(msg); return end
+  local ch = opt("linkChannel", "PARTY")
+  local inGroup = (IsInGroup and IsInGroup()) or (GetNumPartyMembers and GetNumPartyMembers() > 0)
+  local inRaid = (IsInRaid and IsInRaid()) or (GetNumRaidMembers and GetNumRaidMembers() > 0)
+  local inGuild = IsInGuild and IsInGuild()
+  if (ch == "PARTY" and not inGroup) or (ch == "RAID" and not inRaid) or (ch == "GUILD" and not inGuild) then
+    say(("you're not in a %s - opening chat with the link instead."):format(CHANNEL_NAMES[ch]:lower()))
+    if ChatFrame_OpenChat then ChatFrame_OpenChat(msg) end
+    return
+  end
+  SendChatMessage(msg, ch)
+end
+
+-- Ctrl-click: search the open Auction House (Auctionator if present).
+local function searchAH(row)
+  local name = itemInfo(row.iid) or (ns.items[row.iid] and ns.items[row.iid][1])
+  if not name then return end
+  local api = Auctionator and Auctionator.API and Auctionator.API.v1
+  local ahOpen = (AuctionFrame and AuctionFrame:IsShown()) or (AuctionHouseFrame and AuctionHouseFrame:IsShown())
+  if not ahOpen then say("open the Auction House first, then Ctrl-click."); return end
+  if api and api.MultiSearchExact and pcall(api.MultiSearchExact, ADDON, { name }) then return end
+  if AuctionHouseFrame and AuctionHouseFrame:IsShown() and AuctionHouseFrame.SearchBar then
+    local bar = AuctionHouseFrame.SearchBar
+    if bar.SearchBox then bar.SearchBox:SetText(name) end
+    if bar.StartSearch then pcall(bar.StartSearch, bar) end
+    return
+  end
+  if BrowseName and AuctionFrameBrowse_Search then
+    if AuctionFrameTab_OnClick and AuctionFrameTab1 then pcall(AuctionFrameTab_OnClick, AuctionFrameTab1) end
+    BrowseName:SetText(name)
+    pcall(AuctionFrameBrowse_Search)
+    return
+  end
+  say("couldn't find the Auction House search box on this client.")
+end
+
+-- Left-click: open the quest log to this quest (if it's in your log).
+local function showInQuestLog(row)
+  local q = row.quest
+  if not q then return end
+  local qid = q[Q_ID]
+  if not active[qid] then
+    local where = (q[Q_LEVEL] or 0) > 0 and (" - %s, level %d"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
+    say(("%s isn't in your quest log yet%s."):format(q[Q_NAME], where))
+    return
+  end
+  if QuestMapFrame_OpenToQuestDetails then
+    pcall(QuestMapFrame_OpenToQuestDetails, qid)
+    return
+  end
+  local idx = GetQuestLogIndexByID and GetQuestLogIndexByID(qid)
+  if (not idx or idx == 0) and C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
+    idx = C_QuestLog.GetLogIndexForQuestID(qid)
+  end
+  if QuestLogFrame and idx and idx > 0 then
+    ShowUIPanel(QuestLogFrame)
+    if QuestLog_SetSelection then QuestLog_SetSelection(idx) end
+    if QuestLog_Update then QuestLog_Update() end
+  elseif ToggleQuestLog then
+    ToggleQuestLog()
+  end
+end
+
 -- Section collapse state (shared by both modes): db.collapsed[key] = true
 local function isCollapsed(key)
   return key and Krom_QuestHoardDB and Krom_QuestHoardDB.collapsed and Krom_QuestHoardDB.collapsed[key] or false
@@ -669,7 +752,12 @@ local function makePool(parent, fontObj, widthFn)
       hl:SetColorTexture(1, 1, 1, 0.07)
       row:SetScript("OnClick", function(self, button)
         if self.collapseKey and button == "LeftButton" then toggleCollapsed(self.collapseKey)
-        elseif button == "RightButton" and self.iid then toggleHidden(self.iid) end
+        elseif button == "RightButton" and self.iid then toggleHidden(self.iid)
+        elseif button == "LeftButton" and self.iid then
+          if IsShiftKeyDown() then linkInChat(self)
+          elseif IsControlKeyDown() then searchAH(self)
+          else showInQuestLog(self) end
+        end
       end)
       row:SetScript("OnEnter", function(self)
         if self.collapseKey then
@@ -679,6 +767,10 @@ local function makePool(parent, fontObj, widthFn)
         elseif self.iid then
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
           GameTooltip:SetHyperlink("item:" .. self.iid)
+          GameTooltip:AddLine(" ")
+          if self.quest then GameTooltip:AddLine("|cff999999Click: open in quest log|r") end
+          GameTooltip:AddLine(("|cff999999Shift-click: link in %s chat|r"):format(CHANNEL_NAMES[opt("linkChannel", "PARTY")]))
+          GameTooltip:AddLine("|cff999999Ctrl-click: search the Auction House|r")
           GameTooltip:AddLine(isHidden(self.iid) and "|cff999999Right-click: unhide|r" or "|cff999999Right-click: hide from QuestHoard|r")
           GameTooltip:Show()
         end
@@ -1099,13 +1191,13 @@ function render()
     scroll:SetPoint("TOPLEFT", 4, top)
   end
   local i, y = 0, -2
-  local function add(text, gap, iid, collapseKey, note)
+  local function add(text, gap, iid, collapseKey, note, quest)
     if gap then y = y - (compactMode and 8 or 4) end
     i = i + 1
     local row = pool.get(i)
     row:ClearAllPoints()
     row:SetPoint("TOPLEFT", (compactMode and not collapseKey and iid) and 10 or (compactMode and 0 or 8), y)
-    row.note = note
+    row.note, row.quest = note, quest
     row.fs:SetText(text)
     if C.text == DARK_INK.text then row.fs:SetTextColor(0.13, 0.09, 0.04) else row.fs:SetTextColor(1, 1, 1) end
     row.iid, row.collapseKey = iid, collapseKey
@@ -1130,7 +1222,7 @@ function render()
       local body, note = fmt(r)
       local text = (compactMode and "" or "   ") .. body
       if isHidden(r.iid) then text = text .. "  " .. C.hidden .. "(hidden)|r" end
-      add(text, false, r.iid, nil, note)
+      add(text, false, r.iid, nil, note, r.quest or r.q)
     end
   end
 
@@ -1518,6 +1610,32 @@ local function buildOptions()
   nextBtn:SetScript("OnClick", function() step(1) end)
   y = y - 66
 
+  -- Shift-click chat channel: [<] Party [>]
+  local chTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+  chTitle:SetPoint("TOPLEFT", 20, y)
+  chTitle:SetText("Shift-click links items in:")
+  local chPrev = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  chPrev:SetSize(28, 22)
+  chPrev:SetPoint("LEFT", chTitle, "RIGHT", 10, 0)
+  chPrev:SetText("<")
+  local chName = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+  chName:SetPoint("LEFT", chPrev, "RIGHT", 8, 0)
+  chName:SetWidth(60)
+  local chNext = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  chNext:SetSize(28, 22)
+  chNext:SetPoint("LEFT", chName, "RIGHT", 8, 0)
+  chNext:SetText(">")
+  local function chLabel() chName:SetText(CHANNEL_NAMES[opt("linkChannel", "PARTY")]) end
+  local function chStep(dir)
+    local cur, idx = opt("linkChannel", "PARTY"), 1
+    for n, c in ipairs(LINK_CHANNELS) do if c == cur then idx = n end end
+    Krom_QuestHoardDB.linkChannel = LINK_CHANNELS[(idx - 1 + dir) % #LINK_CHANNELS + 1]
+    chLabel()
+  end
+  chPrev:SetScript("OnClick", function() chStep(-1) end)
+  chNext:SetScript("OnClick", function() chStep(1) end)
+  y = y - 34
+
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   reset:SetSize(180, 24)
   reset:SetPoint("TOPLEFT", 20, y - 8)
@@ -1532,12 +1650,14 @@ local function buildOptions()
   help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh compact, /qh full,\n" ..
                "/qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n\n" ..
                "Minimap button: left-click toggles the window, Shift-click switches full / compact,\nright-click opens these options.\n" ..
-               "Right-click an item in the window to hide it; tick 'Hidden' to see or unhide them.")
+               "Items in the window: click = open in quest log, Shift-click = link in chat,\n" ..
+               "Ctrl-click = search the Auction House, right-click = hide (tick 'Hidden' to unhide).")
 
   panel:SetScript("OnShow", function()
     for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
     sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8))
     fsl:SetValue(opt("fontSize", BASE_SIZE))
+    chLabel()
     styleLabel()
   end)
 

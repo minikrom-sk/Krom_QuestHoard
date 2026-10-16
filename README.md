@@ -17,6 +17,8 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
   or right-click the compact list's title. Click any section heading to collapse it.
 - **Minimap button:** left-click toggles the window, right-click opens options
   (also under the game's Options -> AddOns)
+- **Click an item** to open its quest in your quest log, **Shift-click** to link it in chat
+  (Party by default, changeable in Options), **Ctrl-click** to search the open Auction House
 - **Right-click an item** in the window to hide it; tick "Hidden" to see or unhide
 - **Filters** for normal vs profession quests; profession icons are full color when the
   quest requires the profession, dimmed when it's only themed around it
