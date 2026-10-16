@@ -717,7 +717,7 @@ end
 -- Left-click: open the quest log to this quest (if it's in your log).
 local function showInQuestLog(row)
   local q = row.quest
-  if not q then return end
+  if type(q) ~= "table" then return end
   local qid = q[Q_ID]
   if not active[qid] then
     local where = (q[Q_LEVEL] or 0) > 0 and (" - %s, level %d"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
@@ -1309,7 +1309,8 @@ function render()
       local body, note = fmt(r)
       local text = (compactMode and "" or "   ") .. body
       if isHidden(r.iid) then text = text .. "  " .. C.hidden .. "(hidden)|r" end
-      add(text, false, r.iid, nil, note, r.quest or r.q)
+      -- quest-log rows keep the quest's name in .quest and its record in .q
+      add(text, false, r.iid, nil, note, (type(r.quest) == "table" and r.quest) or r.q)
     end
   end
 
