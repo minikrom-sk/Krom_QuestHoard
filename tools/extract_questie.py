@@ -29,20 +29,11 @@ def lst(t):
     return [t[i] for i in range(1, len(t) + 1)] if t is not None else []
 
 PROF_SKILLS = {171, 164, 185, 333, 202, 129, 356, 182, 165, 186, 393, 197}
-# Forever's new profession quests often lack a skill requirement in the data, so
-# also look for the profession's trainer-type word in the quest text. Heuristic.
-PROF_WORDS = [(171, r"\balchemist"), (164, r"\bblacksmith"), (333, r"\benchanter"), (202, r"\bengineer"),
-              (165, r"\bleatherworker"), (197, r"\btailor"), (182, r"\bherbalist"), (186, r"\bminer\b"),
-              (356, r"\bfisherman\b"), (393, r"\bskinner\b"), (129, r"\bfirst aid\b"), (185, r"\bcooking\b")]
-
+# Only a real profession requirement counts. (Checked on Wowhead: Forever's
+# "My First Alchemy Set" is alchemy-themed but open to everyone, so guessing
+# from quest text would mislabel quests as profession-only.)
 def profession(skill, name, text):
-    if skill in PROF_SKILLS:
-        return skill
-    hay = (name + " " + text).lower()
-    for sid, pat in PROF_WORDS:
-        if re.search(pat, hay):
-            return sid
-    return 0
+    return skill if skill in PROF_SKILLS else 0
 
 WORDNUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
            "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20}
