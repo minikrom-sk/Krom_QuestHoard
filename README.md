@@ -12,7 +12,7 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - **Auctionator (optional):** if installed, its scan prices drive the AH-vs-vendor verdict
 - **Minimap button:** left-click toggles the window, right-click opens options
   (also under the game's Options -> AddOns)
-- **Right-click an item** in the window to hide it; tick "Hidden items" to see or unhide
+- **Right-click an item** in the window to hide it; tick "Hidden" to see or unhide
 - **Filters** for normal vs profession quests; profession icons are full color when the
   quest requires the profession, dimmed when it's only themed around it
 - **Self-learning:** quest items missing from the built-in list get recorded as you see them
@@ -32,6 +32,7 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - `/qh minimap` show/hide the minimap button
 - `/qh style` cycle window styles (14 built-in looks; also arrows in Options)
 - `/qh opacity 0-100` window background opacity
+- `/qh font 8-18` window text size (`/qh font` resets)
 - `/qh learned` list items the addon learned on its own
 
 ## Data

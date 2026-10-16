@@ -563,6 +563,16 @@ grip:SetScript("OnMouseUp", function()
   Krom_QuestHoardDB.pos = { p, rp, x, y }
   clampScroll()
 end)
+-- One font for the window's lists, resizable from Options (/qh font).
+local listFont = CreateFont("Krom_QuestHoardListFont")
+listFont:CopyFontObject(GameFontHighlightSmall)
+local BASE_FONT, BASE_SIZE, BASE_FLAGS = GameFontHighlightSmall:GetFont()
+BASE_SIZE = math.floor((BASE_SIZE or 10) + 0.5)
+local function applyFont()
+  listFont:SetFont(BASE_FONT, opt("fontSize", BASE_SIZE), BASE_FLAGS)
+  if refresh then refresh() end
+end
+
 -- Each list row is a button: hover shows the item tooltip, right-click hides it.
 local lines = {}
 local function fitWidths()
@@ -588,7 +598,8 @@ local function getLine(i)
     row:SetHeight(14)
     row:SetWidth((frame:GetWidth() or 340) - 34)
     row:RegisterForClicks("RightButtonUp")
-    local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    local fs = row:CreateFontString(nil, "OVERLAY")
+    fs:SetFontObject(listFont)
     fs:SetPoint("TOPLEFT")
     fs:SetJustifyH("LEFT")
     fs:SetWidth((frame:GetWidth() or 340) - 34)
@@ -628,7 +639,8 @@ local filterChecks = {}
 local function filterCheck(label, key, x, default)
   local cb = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
   cb:SetSize(20, 20)
-  local txt = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  local txt = frame:CreateFontString(nil, "OVERLAY")
+  txt:SetFontObject(listFont)
   txt:SetPoint("LEFT", cb, "RIGHT", 1, 0)
   txt:SetText(label)
   cb:SetScript("OnClick", function(self)
@@ -639,14 +651,18 @@ local function filterCheck(label, key, x, default)
   filterChecks[#filterChecks + 1] = cb
   return cb
 end
-filterCheck("Normal", "showNormal", 10, true)
-filterCheck("Profession", "showProf", 95, true)
-filterCheck("Hidden items", "showHidden", 195, false)
+filterCheck("Quest log", "showLog", 10, true)
+filterCheck("Normal", "showNormal", 0, true)
+filterCheck("Profession", "showProf", 0, true)
+filterCheck("Hidden", "showHidden", 0, false)
+-- Lay the checkboxes out left to right by their label widths (fonts can change).
 local function placeFilters(y)
+  local x = 10
   for _, cb in ipairs(filterChecks) do
     cb:ClearAllPoints()
-    cb:SetPoint("TOPLEFT", cb.x, y)
+    cb:SetPoint("TOPLEFT", x, y)
     cb:SetChecked(opt(cb.key, cb.default))
+    x = x + 22 + math.ceil(cb.label:GetStringWidth() or 40) + 10
   end
 end
 
@@ -739,7 +755,8 @@ function showPicker()
     if not b then
       b = CreateFrame("Button", nil, picker)
       b:SetSize(COL_W - 5, ROW_H)
-      local fs = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      local fs = b:CreateFontString(nil, "OVERLAY")
+      fs:SetFontObject(listFont)
       fs:SetPoint("LEFT", 4, 0)
       fs:SetJustifyH("LEFT")
       b:SetFontString(fs)
@@ -937,7 +954,7 @@ function render()
   end
 
   -- 1. Items your active quests want
-  section("In your quest log", activeItems, function(e)
+  section("In your quest log", opt("showLog", true) and activeItems or {}, function(e)
     local c = e.done and C.good or C.text
     return ("%s%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(profIcon(e.q), e.name, c, e.have, e.need, e.quest)
   end)
@@ -1186,6 +1203,35 @@ local function buildOptions()
   end)
   y = y - 48
 
+  -- Font size slider for the window's text.
+  local fsl = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
+  fsl:SetOrientation("HORIZONTAL")
+  fsl:SetSize(220, 16)
+  fsl:SetPoint("TOPLEFT", 24, y - 18)
+  if fsl.SetBackdrop then
+    fsl:SetBackdrop({
+      bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+      edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+      tile = true, tileSize = 8, edgeSize = 8,
+      insets = { left = 3, right = 3, top = 6, bottom = 6 },
+    })
+  end
+  fsl:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+  fsl:SetMinMaxValues(8, 18)
+  fsl:SetValueStep(1)
+  if fsl.SetObeyStepOnDrag then fsl:SetObeyStepOnDrag(true) end
+  local fslLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+  fslLabel:SetPoint("BOTTOMLEFT", fsl, "TOPLEFT", 0, 3)
+  fsl:SetScript("OnValueChanged", function(_, v)
+    v = math.floor(v + 0.5)
+    fslLabel:SetText(("Window text size: %d%s"):format(v, v == BASE_SIZE and " (default)" or ""))
+    if v ~= opt("fontSize", BASE_SIZE) then
+      Krom_QuestHoardDB.fontSize = v
+      applyFont()
+    end
+  end)
+  y = y - 48
+
   -- Style picker:  [<]  Style name  (3 of 12)  [>]   with a one-line description.
   local styleTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
   styleTitle:SetPoint("TOPLEFT", 20, y)
@@ -1228,13 +1274,14 @@ local function buildOptions()
   local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
   help:SetPoint("TOPLEFT", 20, y - 48)
   help:SetJustifyH("LEFT")
-  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh style, /qh opacity 0-100, /qh learned\n" ..
+  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n" ..
                "Minimap button: left-click toggles the window, right-click opens these options.\n" ..
-               "Right-click an item in the window to hide it; tick 'Hidden items' to see or unhide them.")
+               "Right-click an item in the window to hide it; tick 'Hidden' to see or unhide them.")
 
   panel:SetScript("OnShow", function()
     for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
     sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8))
+    fsl:SetValue(opt("fontSize", BASE_SIZE))
     styleLabel()
   end)
 
@@ -1302,6 +1349,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
     if db.width then frame:SetWidth(db.width) end
     applyStyle()
+    applyFont()
     buildIndexes()
   elseif event == "PLAYER_LOGIN" then
     setPlayerBits()
@@ -1343,6 +1391,17 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     else
       local st, n, total = cycleStyle(1)
       say(("window style %d of %d: %s - %s  (/qh style again for the next)"):format(n, total, st.name, st.desc or ""))
+    end
+  elseif msg:match("^font") then
+    local n = tonumber(msg:match("(%d+)"))
+    if n then
+      Krom_QuestHoardDB.fontSize = math.max(8, math.min(18, n))
+      applyFont()
+      say(("text size %d."):format(Krom_QuestHoardDB.fontSize))
+    else
+      Krom_QuestHoardDB.fontSize = nil
+      applyFont()
+      say(("text size back to default (%d). Use /qh font 8-18 to change it."):format(BASE_SIZE))
     end
   elseif msg:match("^opacity") then
     local n = tonumber(msg:match("(%d+)"))
