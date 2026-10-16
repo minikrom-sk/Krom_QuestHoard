@@ -1658,12 +1658,27 @@ local function buildOptions()
   sub:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
   sub:SetText("Version " .. version() .. " - keeps the quest items you'd otherwise vendor by mistake.")
 
-  local y = -64
-  local checks = {}
+  local y = -58
+  local refreshers = {} -- run on show to sync every control with the saved settings
+
+  -- Section heading with a thin divider line.
+  local function heading(text)
+    y = y - 14
+    local h = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    h:SetPoint("TOPLEFT", 16, y)
+    h:SetText(text)
+    local line = panel:CreateTexture(nil, "ARTWORK")
+    line:SetColorTexture(1, 0.82, 0, 0.35)
+    line:SetHeight(1)
+    line:SetPoint("LEFT", h, "RIGHT", 8, 0)
+    line:SetPoint("RIGHT", panel, "RIGHT", -16, 0)
+    y = y - 24
+  end
+
   local function check(label, get, set)
     local cb = CreateFrame("CheckButton", nil, panel, "UICheckButtonTemplate")
-    cb:SetPoint("TOPLEFT", 16, y)
-    y = y - 30
+    cb:SetPoint("TOPLEFT", 24, y)
+    y = y - 28
     local txt = cb.Text or cb.text
     if type(txt) ~= "table" then txt = nil end
     if not txt then
@@ -1672,23 +1687,117 @@ local function buildOptions()
     end
     txt:SetText(label)
     cb:SetScript("OnClick", function(self) set(self:GetChecked() and true or false) end)
-    cb.get = get
-    checks[#checks + 1] = cb
+    refreshers[#refreshers + 1] = function() cb:SetChecked(get()) end
   end
 
+  -- Hand-built slider (works on every client): label above, value in the label.
+  local function slider(minV, maxV, stepV, labelFn, get, set)
+    local sl = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
+    sl:SetOrientation("HORIZONTAL")
+    sl:SetSize(240, 16)
+    sl:SetPoint("TOPLEFT", 32, y - 18)
+    if sl.SetBackdrop then
+      sl:SetBackdrop({
+        bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+        edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+        tile = true, tileSize = 8, edgeSize = 8,
+        insets = { left = 3, right = 3, top = 6, bottom = 6 },
+      })
+    end
+    sl:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+    sl:SetMinMaxValues(minV, maxV)
+    sl:SetValueStep(stepV)
+    if sl.SetObeyStepOnDrag then sl:SetObeyStepOnDrag(true) end
+    local lbl = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    lbl:SetPoint("BOTTOMLEFT", sl, "TOPLEFT", 0, 3)
+    sl:SetScript("OnValueChanged", function(_, v)
+      v = math.floor(v / stepV + 0.5) * stepV
+      lbl:SetText(labelFn(v))
+      set(v)
+    end)
+    refreshers[#refreshers + 1] = function() sl:SetValue(get()) end
+    y = y - 46
+    return sl
+  end
+
+  -- [<]  value  [>] picker with an optional description line.
+  local function picker(label, width, getText, getDesc, stepFn)
+    local t = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    t:SetPoint("TOPLEFT", 28, y - 4)
+    t:SetText(label)
+    local prev = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    prev:SetSize(26, 22)
+    prev:SetPoint("TOPLEFT", 190, y)
+    prev:SetText("<")
+    local name = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    name:SetPoint("LEFT", prev, "RIGHT", 6, 0)
+    name:SetWidth(width)
+    name:SetJustifyH("CENTER")
+    local nxt = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    nxt:SetSize(26, 22)
+    nxt:SetPoint("LEFT", name, "RIGHT", 6, 0)
+    nxt:SetText(">")
+    local desc
+    if getDesc then
+      desc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+      desc:SetPoint("TOPLEFT", prev, "BOTTOMLEFT", 0, -4)
+      desc:SetJustifyH("LEFT")
+    end
+    local function update()
+      name:SetText(getText())
+      if desc then desc:SetText(getDesc()) end
+    end
+    prev:SetScript("OnClick", function() stepFn(-1); update() end)
+    nxt:SetScript("OnClick", function() stepFn(1); update() end)
+    refreshers[#refreshers + 1] = update
+    y = y - (getDesc and 48 or 32)
+  end
+
+  -- ---------------- Window ----------------
+  heading("Window")
   check("Show the QuestHoard window", function() return activeFrame():IsShown() end, setShown)
   check("Compact mode (no background, just the list)", function() return isCompact() end, setCompact)
-  check("Compact mode: also list quest log items", function() return opt("compactLog", false) end,
+  check("Compact mode: also list quest log items in their own section", function() return opt("compactLog", false) end,
     function(v) Krom_QuestHoardDB.compactLog = v; refresh() end)
-  check("Lock window position", function() return opt("locked", false) end,
+  check("Lock window position and size", function() return opt("locked", false) end,
     function(v) Krom_QuestHoardDB.locked = v end)
   check("Show minimap button", function() return not Krom_QuestHoardDB.minimap.hide end, function(v)
     Krom_QuestHoardDB.minimap.hide = not v
     if DBIcon then if v then DBIcon:Show(ADDON) else DBIcon:Hide(ADDON) end end
   end)
-  check("Chat message when you loot something worth keeping", function() return opt("pings", true) end,
-    function(v) Krom_QuestHoardDB.pings = v end)
-  check("Show \"Watch for (this zone)\" in the window", function() return opt("showWatch", true) end,
+  local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  reset:SetSize(200, 24)
+  reset:SetPoint("TOPLEFT", 28, y - 2)
+  reset:SetText("Reset window size & position")
+  reset:SetScript("OnClick", resetPosition)
+  y = y - 34
+
+  -- ---------------- Appearance ----------------
+  heading("Appearance")
+  local opacity -- the style picker nudges this to the new style's default
+  picker("Window style", 200,
+    function()
+      local list, cur, idx = availableStyles(), currentStyle(), 1
+      for n, st in ipairs(list) do if st.key == cur.key then idx = n end end
+      return ("%s  |cff999999(%d of %d)|r"):format(cur.name, idx, #list)
+    end,
+    function() return currentStyle().desc or "" end,
+    function(dir)
+      cycleStyle(dir)
+      if opacity then opacity:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8)) end
+    end)
+  opacity = slider(0, 1, 0.05,
+    function(v) return ("Background opacity: %d%%"):format(v * 100) end,
+    function() return opt("bgAlpha", currentStyle().light and 1 or 0.8) end,
+    function(v) Krom_QuestHoardDB.bgAlpha = v; applyAlpha() end)
+  slider(8, 18, 1,
+    function(v) return ("Text size: %d%s"):format(v, v == BASE_SIZE and " (default)" or "") end,
+    function() return opt("fontSize", BASE_SIZE) end,
+    function(v) if v ~= opt("fontSize", BASE_SIZE) then Krom_QuestHoardDB.fontSize = v; applyFont() end end)
+
+  -- ---------------- What to track ----------------
+  heading("What to track")
+  check("Show \"Watch for\" (items for quests in the watched zone)", function() return opt("showWatch", true) end,
     function(v) Krom_QuestHoardDB.showWatch = v; refresh() end)
   check("Only show profession quests for professions I have (quests in my log always show)",
     function() return opt("myProfOnly", false) end,
@@ -1696,179 +1805,43 @@ local function buildOptions()
   check("Track vendor-sold items (water, vials...) in every zone, not just the watched one",
     function() return opt("vendorItems", false) end,
     function(v) Krom_QuestHoardDB.vendorItems = v; refresh() end)
+  slider(1, 30, 1,
+    function(v) return ("Hide quests more than %d levels above you%s"):format(v, v == LEVEL_GAP and " (default)" or "") end,
+    function() return opt("levelGap", LEVEL_GAP) end,
+    function(v) if v ~= opt("levelGap", LEVEL_GAP) then Krom_QuestHoardDB.levelGap = v; if refresh then refresh() end end end)
 
-  -- Background opacity slider (built by hand so it works on every client).
-  local sl = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
-  sl:SetOrientation("HORIZONTAL")
-  sl:SetSize(220, 16)
-  sl:SetPoint("TOPLEFT", 24, y - 18)
-  if sl.SetBackdrop then
-    sl:SetBackdrop({
-      bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
-      edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-      tile = true, tileSize = 8, edgeSize = 8,
-      insets = { left = 3, right = 3, top = 6, bottom = 6 },
-    })
-  end
-  sl:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
-  sl:SetMinMaxValues(0, 1)
-  sl:SetValueStep(0.05)
-  if sl.SetObeyStepOnDrag then sl:SetObeyStepOnDrag(true) end
-  local slLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  slLabel:SetPoint("BOTTOMLEFT", sl, "TOPLEFT", 0, 3)
-  sl:SetScript("OnValueChanged", function(_, v)
-    v = math.floor(v * 20 + 0.5) / 20
-    slLabel:SetText(("Window background opacity: %d%%"):format(v * 100))
-    Krom_QuestHoardDB.bgAlpha = v
-    applyAlpha()
-  end)
-  y = y - 48
+  -- ---------------- Chat ----------------
+  heading("Chat")
+  check("Chat message when you loot something worth keeping", function() return opt("pings", true) end,
+    function(v) Krom_QuestHoardDB.pings = v end)
+  picker("Shift-click links items in", 70,
+    function() return CHANNEL_NAMES[opt("linkChannel", "PARTY")] end, nil,
+    function(dir)
+      local cur, idx = opt("linkChannel", "PARTY"), 1
+      for n, c in ipairs(LINK_CHANNELS) do if c == cur then idx = n end end
+      Krom_QuestHoardDB.linkChannel = LINK_CHANNELS[(idx - 1 + dir) % #LINK_CHANNELS + 1]
+    end)
 
-  -- Font size slider for the window's text.
-  local fsl = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
-  fsl:SetOrientation("HORIZONTAL")
-  fsl:SetSize(220, 16)
-  fsl:SetPoint("TOPLEFT", 24, y - 18)
-  if fsl.SetBackdrop then
-    fsl:SetBackdrop({
-      bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
-      edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-      tile = true, tileSize = 8, edgeSize = 8,
-      insets = { left = 3, right = 3, top = 6, bottom = 6 },
-    })
-  end
-  fsl:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
-  fsl:SetMinMaxValues(8, 18)
-  fsl:SetValueStep(1)
-  if fsl.SetObeyStepOnDrag then fsl:SetObeyStepOnDrag(true) end
-  local fslLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  fslLabel:SetPoint("BOTTOMLEFT", fsl, "TOPLEFT", 0, 3)
-  fsl:SetScript("OnValueChanged", function(_, v)
-    v = math.floor(v + 0.5)
-    fslLabel:SetText(("Window text size: %d%s"):format(v, v == BASE_SIZE and " (default)" or ""))
-    if v ~= opt("fontSize", BASE_SIZE) then
-      Krom_QuestHoardDB.fontSize = v
-      applyFont()
-    end
-  end)
-  y = y - 48
-
-  -- "High level" cut-off: hide quests more than N levels above you.
-  local lsl = CreateFrame("Slider", nil, panel, BackdropTemplateMixin and "BackdropTemplate" or nil)
-  lsl:SetOrientation("HORIZONTAL")
-  lsl:SetSize(220, 16)
-  lsl:SetPoint("TOPLEFT", 24, y - 18)
-  if lsl.SetBackdrop then
-    lsl:SetBackdrop({
-      bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
-      edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
-      tile = true, tileSize = 8, edgeSize = 8,
-      insets = { left = 3, right = 3, top = 6, bottom = 6 },
-    })
-  end
-  lsl:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
-  lsl:SetMinMaxValues(1, 30)
-  lsl:SetValueStep(1)
-  if lsl.SetObeyStepOnDrag then lsl:SetObeyStepOnDrag(true) end
-  local lslLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  lslLabel:SetPoint("BOTTOMLEFT", lsl, "TOPLEFT", 0, 3)
-  lsl:SetScript("OnValueChanged", function(_, v)
-    v = math.floor(v + 0.5)
-    lslLabel:SetText(("Hide quests more than %d levels above you%s"):format(v, v == LEVEL_GAP and " (default)" or ""))
-    if v ~= opt("levelGap", LEVEL_GAP) then
-      Krom_QuestHoardDB.levelGap = v
-      if refresh then refresh() end
-    end
-  end)
-  y = y - 48
-
-  -- Style picker:  [<]  Style name  (3 of 12)  [>]   with a one-line description.
-  local styleTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  styleTitle:SetPoint("TOPLEFT", 20, y)
-  styleTitle:SetText("Window style")
-  local prevBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  prevBtn:SetSize(28, 22)
-  prevBtn:SetPoint("TOPLEFT", 20, y - 18)
-  prevBtn:SetText("<")
-  local styleName = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-  styleName:SetPoint("LEFT", prevBtn, "RIGHT", 10, 0)
-  styleName:SetWidth(230)
-  styleName:SetJustifyH("CENTER")
-  local nextBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  nextBtn:SetSize(28, 22)
-  nextBtn:SetPoint("LEFT", styleName, "RIGHT", 10, 0)
-  nextBtn:SetText(">")
-  local styleDesc = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-  styleDesc:SetPoint("TOPLEFT", prevBtn, "BOTTOMLEFT", 0, -6)
-  styleDesc:SetJustifyH("LEFT")
-  local function styleLabel()
-    local list, cur, idx = availableStyles(), currentStyle(), 1
-    for n, st in ipairs(list) do if st.key == cur.key then idx = n end end
-    styleName:SetText(("%s  |cff999999(%d of %d)|r"):format(cur.name, idx, #list))
-    styleDesc:SetText(cur.desc or "")
-  end
-  local function step(dir)
-    cycleStyle(dir); styleLabel()
-    if sl then sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8)) end
-  end
-  prevBtn:SetScript("OnClick", function() step(-1) end)
-  nextBtn:SetScript("OnClick", function() step(1) end)
-  y = y - 66
-
-  -- Shift-click chat channel: [<] Party [>]
-  local chTitle = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-  chTitle:SetPoint("TOPLEFT", 20, y)
-  chTitle:SetText("Shift-click links items in:")
-  local chPrev = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  chPrev:SetSize(28, 22)
-  chPrev:SetPoint("LEFT", chTitle, "RIGHT", 10, 0)
-  chPrev:SetText("<")
-  local chName = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-  chName:SetPoint("LEFT", chPrev, "RIGHT", 8, 0)
-  chName:SetWidth(60)
-  local chNext = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  chNext:SetSize(28, 22)
-  chNext:SetPoint("LEFT", chName, "RIGHT", 8, 0)
-  chNext:SetText(">")
-  local function chLabel() chName:SetText(CHANNEL_NAMES[opt("linkChannel", "PARTY")]) end
-  local function chStep(dir)
-    local cur, idx = opt("linkChannel", "PARTY"), 1
-    for n, c in ipairs(LINK_CHANNELS) do if c == cur then idx = n end end
-    Krom_QuestHoardDB.linkChannel = LINK_CHANNELS[(idx - 1 + dir) % #LINK_CHANNELS + 1]
-    chLabel()
-  end
-  chPrev:SetScript("OnClick", function() chStep(-1) end)
-  chNext:SetScript("OnClick", function() chStep(1) end)
-  y = y - 34
-
-  local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  reset:SetSize(180, 24)
-  reset:SetPoint("TOPLEFT", 20, y - 8)
-  reset:SetText("Reset window size & position")
-  reset:SetScript("OnClick", resetPosition)
-
+  -- ---------------- Help ----------------
+  heading("Help")
   local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-  help:SetPoint("TOPLEFT", 20, y - 48)
+  help:SetPoint("TOPLEFT", 28, y)
   help:SetJustifyH("LEFT")
-  help:SetWidth(560) -- wrap inside the options panel instead of running off it
+  help:SetWidth(540)
   if help.SetWordWrap then help:SetWordWrap(true) end
-  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh compact, /qh full,\n" ..
-               "/qh style, /qh opacity 0-100, /qh font 8-18, /qh levels N, /qh learned\n\n" ..
-               "Minimap button: left-click toggles the window, Shift-click switches full / compact,\nright-click opens these options.\n" ..
-               "Items in the window: click = open in quest log, Shift-click = link in chat,\n" ..
-               "Ctrl-click = search the Auction House, right-click = hide (tick 'Hidden' to unhide).")
+  help:SetSpacing(3)
+  help:SetText("|cffffd100Items in the window|r  click: open in quest log   Shift-click: link in chat\n" ..
+               "Ctrl-click: search the Auction House   right-click: hide (tick 'Hidden' to unhide)\n" ..
+               "Click a section heading to collapse it. Hover the filters for what each one does.\n\n" ..
+               "|cffffd100Minimap button|r  left-click: show/hide   Shift-click: full / compact   right-click: options\n\n" ..
+               "|cffffd100Commands|r  /qh  /qh options  /qh compact  /qh full  /qh lock  /qh reset\n" ..
+               "/qh style  /qh opacity 0-100  /qh font 8-18  /qh levels N  /qh learned  /qh debug")
+  y = y - (help:GetStringHeight() or 120) - 20
 
-  -- Content height = everything above plus the help text.
-  panel:SetHeight(-(y - 48) + (help:GetStringHeight() or 80) + 30)
+  panel:SetHeight(-y + 20)
   container:SetScript("OnSizeChanged", function(self) panel:SetWidth(math.max(400, (self:GetWidth() or 600) - 32)) end)
-
   container:SetScript("OnShow", function()
-    for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
-    sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8))
-    fsl:SetValue(opt("fontSize", BASE_SIZE))
-    lsl:SetValue(opt("levelGap", LEVEL_GAP))
-    chLabel()
-    styleLabel()
+    for _, f in ipairs(refreshers) do f() end
   end)
 
   if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
