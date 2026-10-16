@@ -27,7 +27,7 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 
 - `/qh` toggle the list
 - `/qh lock` lock/unlock the window
-- `/qh reset` reset the window position
+- `/qh reset` reset the window size and position
 - `/qh options` open the settings panel
 - `/qh minimap` show/hide the minimap button
 - `/qh opacity 0-100` window background opacity

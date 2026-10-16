@@ -502,6 +502,11 @@ grip:SetScript("OnMouseDown", function()
     frame:ClearAllPoints()
     frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
   end
+  -- Never let the window be dragged past the screen's bottom/right edge.
+  local maxW = math.max(300, math.min(800, (UIParent:GetRight() or 2000) - (frame:GetLeft() or 0) - 4))
+  local maxH = math.max(110, math.min(1000, (frame:GetTop() or 1000) - (UIParent:GetBottom() or 0) - 4))
+  if frame.SetResizeBounds then frame:SetResizeBounds(300, 110, maxW, maxH)
+  elseif frame.SetMaxResize then frame:SetMaxResize(maxW, maxH) end
   sizing = true
   frame:StartSizing("BOTTOMRIGHT")
 end)
@@ -514,10 +519,6 @@ grip:SetScript("OnMouseUp", function()
   local p, _, rp, x, y = frame:GetPoint()
   Krom_QuestHoardDB.pos = { p, rp, x, y }
   clampScroll()
-end)
-grip:SetScript("OnDoubleClick", function()
-  Krom_QuestHoardDB.height = nil -- back to auto-fit (width stays)
-  if refresh then refresh() end
 end)
 -- Each list row is a button: hover shows the item tooltip, right-click hides it.
 local lines = {}
@@ -848,7 +849,9 @@ function render()
   content:SetHeight(contentH)
   local saved = Krom_QuestHoardDB and Krom_QuestHoardDB.height
   if not sizing then
-    frame:SetHeight(saved or math.min(-top + contentH + 24, AUTO_MAX_HEIGHT))
+    local room = (frame:GetTop() or 1000) - (UIParent:GetBottom() or 0) - 10
+    -- Saved or auto-fit, the window never extends below the bottom of the screen.
+    frame:SetHeight(math.max(110, math.min(saved or math.min(-top + contentH + 24, AUTO_MAX_HEIGHT), room)))
   end
   clampScroll()
 end
@@ -947,9 +950,11 @@ end
 local function toggleWindow() setShown(not frame:IsShown()) end
 
 local function resetPosition()
-  Krom_QuestHoardDB.pos = nil
+  Krom_QuestHoardDB.pos, Krom_QuestHoardDB.height, Krom_QuestHoardDB.width = nil, nil, nil
   frame:ClearAllPoints()
   frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
+  frame:SetWidth(340)
+  if refresh then refresh() end
 end
 
 local DBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
@@ -1030,7 +1035,7 @@ local function buildOptions()
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   reset:SetSize(180, 24)
   reset:SetPoint("TOPLEFT", 20, y - 8)
-  reset:SetText("Reset window position")
+  reset:SetText("Reset window size & position")
   reset:SetScript("OnClick", resetPosition)
 
   local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
@@ -1134,9 +1139,9 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
   if msg == "lock" then
     Krom_QuestHoardDB.locked = not Krom_QuestHoardDB.locked
     say(Krom_QuestHoardDB.locked and "window locked." or "window unlocked - drag to move.")
-  elseif msg == "reset" then
+  elseif msg == "reset" or msg == "fit" then
     resetPosition()
-    say("window position reset.")
+    say("window size and position reset.")
   elseif msg:match("^opacity") then
     local n = tonumber(msg:match("(%d+)"))
     if n then
