@@ -501,8 +501,8 @@ close:SetScript("OnClick", function()
 end)
 -- "Compact" button next to close: swaps the window for the slim tracker list.
 local slim = CreateFrame("Button", nil, frame)
-slim:SetSize(20, 20)
-slim:SetPoint("RIGHT", close, "LEFT", 2, 0)
+slim:SetSize(28, 28)
+slim:SetPoint("RIGHT", close, "LEFT", 4, 0)
 slim:SetNormalTexture("Interface\\Buttons\\UI-Panel-SmallerButton-Up")
 slim:SetPushedTexture("Interface\\Buttons\\UI-Panel-SmallerButton-Down")
 slim:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight", "ADD")
@@ -1036,7 +1036,7 @@ function render()
     row:Show()
     local h = math.max(12, (row.fs:GetStringHeight() or 14))
     row:SetHeight(h)
-    y = y - h
+    y = y - h - 3 -- a little air between lines
   end
   local function section(key, title, rows, fmt)
     local shown = {}
@@ -1069,8 +1069,8 @@ function render()
     local q = e.quest
     local need = q[Q_NEED] or 0
     local where = (q[Q_LEVEL] or 0) > 0 and ("%s lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
-    return ("%s%s %s  " .. C.muted .. "%s%s (%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
-      need > 0 and (" x" .. need) or "", where)
+    return ("%s%s %s  " .. C.muted .. "%s%s%s|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+      need > 0 and (" x" .. need) or "", compactMode and "" or (" (" .. where .. ")"))
   end)
 
   -- 3. Drops in this zone for quests you haven't picked up yet
@@ -1095,8 +1095,8 @@ function render()
   section("watch", picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
-    return ("%s%s %s  " .. C.muted .. "%s%s (lvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
-      need > 0 and (" x" .. need) or "", q[Q_LEVEL])
+    return ("%s%s %s  " .. C.muted .. "%s%s%s|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+      need > 0 and (" x" .. need) or "", compactMode and "" or (" (lvl " .. q[Q_LEVEL] .. ")"))
   end)
   if picked and #watch == 0 and not compactMode then
     add((C.header .. "Watch for in %s|r"):format(picked), i > 0)
@@ -1396,8 +1396,11 @@ local function buildOptions()
   local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
   help:SetPoint("TOPLEFT", 20, y - 48)
   help:SetJustifyH("LEFT")
-  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh compact, /qh full, /qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n" ..
-               "Minimap button: left-click toggles the window, right-click opens these options.\n" ..
+  help:SetWidth(560) -- wrap inside the options panel instead of running off it
+  if help.SetWordWrap then help:SetWordWrap(true) end
+  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh compact, /qh full,\n" ..
+               "/qh style, /qh opacity 0-100, /qh font 8-18, /qh learned\n\n" ..
+               "Minimap button: left-click toggles the window, Shift-click switches full / compact,\nright-click opens these options.\n" ..
                "Right-click an item in the window to hide it; tick 'Hidden' to see or unhide them.")
 
   panel:SetScript("OnShow", function()
