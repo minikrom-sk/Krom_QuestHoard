@@ -142,6 +142,38 @@ for qid, q in quests.items():
 def s(x):
     return '"' + x.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+# Quests that count as "this one is done" when they are done: either/or
+# quests (exclusiveTo), the next quest in the chain, and same-name versions
+# from the same quest-giver (Forever re-did some quests as new IDs).
+used_q = {q[0] for e in out.values() for q in e["quests"]}
+def giver_key(r):
+    st = r[2]
+    if st is None:
+        return None
+    for slot in (1, 2):
+        ids = st[slot]
+        if ids is not None and ids[1] is not None:
+            return (slot, ids[1])
+    return None
+by_name = {}
+for qid, r in quests.items():
+    if r is not None and r[1] is not None:
+        by_name.setdefault((r[1], giver_key(r)), []).append(int(qid))
+alts = {}
+for qid in used_q:
+    r = quests[qid]
+    a = set()
+    if r[16] is not None:
+        a.update(int(r[16][i]) for i in range(1, len(r[16]) + 1))
+    if r[22]:
+        a.add(int(r[22]))
+    g = giver_key(r)
+    if g is not None:
+        a.update(by_name.get((r[1], g), []))
+    a.discard(qid)
+    if a:
+        alts[qid] = sorted(a)
+
 lines = [
     "-- AUTO-GENERATED from QuestieDB's Forever data (thanks, Questie team).",
     "-- Do not hand-edit: regenerate with the extractor instead.",
@@ -155,6 +187,10 @@ for iid in sorted(out):
     lines.append("[%d]={%s,{%s}%s}," % (iid, s(e["name"]), qs, ",true" if e["vendor"] else ""))
 lines.append("}")
 used = sorted({q[3] for e in out.values() for q in e["quests"]})
+lines.append("ns.questAlts = {")
+for qid in sorted(alts):
+    lines.append("[%d]={%s}," % (qid, ",".join(str(x) for x in alts[qid])))
+lines.append("}")
 lines.append("ns.zoneGroup = {")
 for z in used:
     lines.append("[%s]=%s," % (s(z), s(zone_group.get(z, "Other"))))
@@ -164,6 +200,7 @@ open(OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 links=[q for e in out.values() for q in e["quests"]]
 print(f"profession links: required {sum(1 for q in links if q[9] > 0)}, themed {sum(1 for q in links if q[9] < 0)}")
 print("zone groups:", {g: sum(1 for z in used if zone_group.get(z, "Other") == g) for g in set(list(GROUPS.values()) + ["Other"])})
+print(f"quests with alternates: {len(alts)}")
 print(f"counts found for {sum(1 for q in links if q[8])} of {len(links)} quest links")
 print(f"vendor-sold: {sum(1 for e in out.values() if e['vendor'])}")
 print(f"kept {len(out)} tradeable items across {sum(len(e['quests']) for e in out.values())} quest links; skipped {skipped} mount links")

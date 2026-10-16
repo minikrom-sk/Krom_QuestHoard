@@ -392,10 +392,25 @@ local function questsFor(itemID, lname)
   return list
 end
 
+-- Done if this quest, or any alternate version / either-or quest / next quest
+-- in its chain, is done (see ns.questAlts from the data file).
 local function questState(questID)
   if active[questID] then return "active" end
   if isDone(questID) then return "done" end
+  local alts = ns.questAlts and ns.questAlts[questID]
+  if alts then
+    for _, a in ipairs(alts) do if isDone(a) then return "done" end end
+  end
   return "todo"
+end
+
+-- "Too high for now" filter: quests more than 10 levels above you are skipped
+-- unless the "High level" box is ticked.
+local LEVEL_GAP = 10
+local function levelOK(q)
+  if opt("showHigh", false) then return true end
+  local my = UnitLevel and UnitLevel("player") or 60
+  return (q[Q_LEVEL] or 0) <= my + LEVEL_GAP
 end
 
 -- Quests that still need the item, active ones first. Empty when all are done.
@@ -435,7 +450,9 @@ local function scanBags()
         -- Items for quests in your log already show in the quest-log section;
         -- this list is for the ones you're holding for LATER quests.
         local later
-        for _, q in ipairs(open) do if not active[q[Q_ID]] and passesFilter(q) then later = q; break end end
+        for _, q in ipairs(open) do
+          if not active[q[Q_ID]] and passesFilter(q) and levelOK(q) then later = q; break end
+        end
         if later then
           keepList[#keepList + 1] = { iid = iid, name = display, count = count, quest = later }
           local old = lastBags[iid] or 0
@@ -797,15 +814,21 @@ filterCheck("Quest log", "showLog", 10, true)
 filterCheck("Normal", "showNormal", 0, true)
 filterCheck("Profession", "showProf", 0, true)
 filterCheck("Hidden", "showHidden", 0, false)
+filterCheck("Done", "showDone", 0, false)
+filterCheck("High level", "showHigh", 0, false)
 -- Lay the checkboxes out left to right by their label widths (fonts can change).
+-- Wraps onto a second row when the window is narrow. Returns rows used.
 local function placeFilters(y)
-  local x = 10
+  local x, rows, maxX = 10, 1, (frame:GetWidth() or 340) - 10
   for _, cb in ipairs(filterChecks) do
+    local w = 22 + math.ceil(cb.label:GetStringWidth() or 40) + 10
+    if x > 10 and x + w - 10 > maxX then x, y, rows = 10, y - 20, rows + 1 end
     cb:ClearAllPoints()
     cb:SetPoint("TOPLEFT", x, y)
     cb:SetChecked(opt(cb.key, cb.default))
-    x = x + 22 + math.ceil(cb.label:GetStringWidth() or 40) + 10
+    x = x + w
   end
+  return rows
 end
 
 local picker = CreateFrame("Frame", nil, frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
@@ -1071,7 +1094,8 @@ function render()
   end
   local top = watching and -68 or -46
   if not compactMode then
-    placeFilters(watching and -47 or -25)
+    local rows = placeFilters(watching and -47 or -25)
+    top = top - (rows - 1) * 20
     scroll:SetPoint("TOPLEFT", 4, top)
   end
   local i, y = 0, -2
@@ -1137,15 +1161,19 @@ function render()
   local myLevel = UnitLevel and UnitLevel("player") or 60
   local watch, seen = {}, {}
   local zones = not watching and {} or picked and { [picked] = true } or currentZones()
+  local wantDone = opt("showDone", false)
+  -- When the quest-log section isn't shown, its items appear here instead.
+  local wantActive = not showLog
   for z in pairs(zones) do
     for _, pair in ipairs(zoneIndex[z] or {}) do
       local iid, q = pair[1], pair[2]
+      local st = questState(q[Q_ID])
       if not seen[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
-         and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3) and passesFilter(q)
-         and questState(q[Q_ID]) == "todo" then
+         and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3) and passesFilter(q) and levelOK(q)
+         and (st == "todo" or (st == "done" and wantDone) or (st == "active" and wantActive)) then
         if sellable(iid) then
           seen[iid] = true
-          watch[#watch + 1] = { iid = iid, name = ns.items[iid][1], quest = q }
+          watch[#watch + 1] = { iid = iid, name = ns.items[iid][1], quest = q, done = st == "done" }
         end
       end
     end
@@ -1154,6 +1182,9 @@ function render()
   section("watch", picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
+    if e.done then
+      return ("%s%s%s  (done)|r"):format(C.hidden, e.name, compactMode and "" or ("  " .. q[Q_NAME])), questNote(q, need)
+    end
     if compactMode then
       return ("%s%s %s"):format(profIcon(q), e.name, haveNeed(owned(e.iid), need)), questNote(q, need)
     end
@@ -1215,6 +1246,13 @@ local function levelColor(level)
   return "|cff808080"
 end
 
+local function questieLoaded()
+  local f = (C_AddOns and C_AddOns.IsAddOnLoaded) or IsAddOnLoaded
+  if not f then return false end
+  local ok, loaded = pcall(f, "Questie")
+  return ok and loaded and true or false
+end
+
 local function tagTooltip(tt)
   if not tt or not tt.GetItem then return end
   local ok, name, link = pcall(tt.GetItem, tt)
@@ -1227,6 +1265,13 @@ local function tagTooltip(tt)
   if #qs == 0 then return end
 
   local open = openQuests(qs)
+  local anyOpen = #open > 0
+  -- Questie already lists quests in your log on item tooltips; don't repeat them.
+  if questieLoaded() then
+    local rest = {}
+    for _, q in ipairs(open) do if not active[q[Q_ID]] then rest[#rest + 1] = q end end
+    open = rest
+  end
   local shown = #open
   if shown > 0 then
     tt:AddLine("|cffffb000QuestHoard - keep for:|r")
@@ -1246,7 +1291,7 @@ local function tagTooltip(tt)
       tt:AddLine(("  %s%s%s%s"):format(need, q[Q_NAME], where, prof), 1, 1, 1)
     end
   end
-  open = shown > 0
+  open = anyOpen
   if shown > MAX_TOOLTIP_QUESTS then
     tt:AddLine(("  |cff999999+%d more|r"):format(shown - MAX_TOOLTIP_QUESTS))
   end
