@@ -12,6 +12,8 @@ their quests are done. Only tracks items that are not soulbound and that a vendo
 - **Auctionator (optional):** if installed, its scan prices drive the AH-vs-vendor verdict
 - **Compact mode:** a slim, background-free list (like Questie's tracker). Switch with the
   button next to the window's close X, Shift-click the minimap button, `/qh compact` / `/qh full`,
+  or right-click the compact list's title. Lines are just item + have/need (hover for the quest);
+  hover the list and drag its corner grip to change the width.
   or right-click the compact list's title. Click any section heading to collapse it.
 - **Minimap button:** left-click toggles the window, right-click opens options
   (also under the game's Options -> AddOns)

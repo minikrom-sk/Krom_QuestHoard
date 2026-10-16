@@ -117,6 +117,16 @@ local function owned(itemID)
 end
 
 -- "x3" colored by progress toward the quest's need.
+-- Compact lines: "3/5" (or "x3" when the count needed is unknown), colored by progress.
+local function haveNeed(have, need)
+  local c = have == 0 and C.muted or (need > 0 and have >= need) and C.good or C.text
+  return need > 0 and ("%s%d/%d|r"):format(c, have, need) or ("%sx%d|r"):format(c, have)
+end
+local function questNote(q, need)
+  local where = (q[Q_LEVEL] or 0) > 0 and (" (%s, lvl %d)"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
+  return ("For: %s%s%s"):format(q[Q_NAME], need > 0 and (" - needs " .. need) or "", where)
+end
+
 local function haveText(have, need)
   local c = have == 0 and C.muted or (need > 0 and have >= need) and C.good or C.text
   return ("%sx%d|r"):format(c, have)
@@ -652,6 +662,7 @@ local function makePool(parent, fontObj, widthFn)
         elseif self.iid then
           GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
           GameTooltip:SetHyperlink("item:" .. self.iid)
+          if self.note then GameTooltip:AddLine(self.note, 1, 0.82, 0) end
           GameTooltip:AddLine(isHidden(self.iid) and "|cff999999Right-click: unhide|r" or "|cff999999Right-click: hide from QuestHoard|r")
           GameTooltip:Show()
         end
@@ -669,7 +680,7 @@ lines = fullPool -- fitWidths() resizes these
 -- ---------------------------------------------------------------------------
 -- Compact tracker: no background, just an outlined list (Questie-tracker style)
 -- ---------------------------------------------------------------------------
-local COMPACT_W = 260
+local COMPACT_W = 220 -- default; drag the corner grip to change (saved as db.cwidth)
 local compactFont = CreateFont("Krom_QuestHoardCompactFont")
 compactFont:CopyFontObject(GameFontHighlightSmall)
 local compact = CreateFrame("Frame", "Krom_QuestHoardCompactFrame", UIParent)
@@ -709,7 +720,48 @@ compactTitle:SetScript("OnLeave", function() GameTooltip:Hide() end)
 local compactContent = CreateFrame("Frame", nil, compact)
 compactContent:SetPoint("TOPLEFT", 0, -18)
 compactContent:SetSize(COMPACT_W, 1)
-local compactPool = makePool(compactContent, compactFont, function() return COMPACT_W end)
+local compactPool = makePool(compactContent, compactFont, function() return (compact:GetWidth() or COMPACT_W) - 4 end)
+
+-- Width grip: only visible while the mouse is over the list.
+compact:SetResizable(true)
+if compact.SetResizeBounds then compact:SetResizeBounds(140, 30, 500, 2000)
+elseif compact.SetMinResize then compact:SetMinResize(140, 30); compact:SetMaxResize(500, 2000) end
+local cgrip = CreateFrame("Button", nil, compact)
+cgrip:SetSize(14, 14)
+cgrip:SetPoint("BOTTOMRIGHT", 0, 0)
+cgrip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+cgrip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+cgrip:SetAlpha(0)
+local function fitCompactWidths()
+  local w = (compact:GetWidth() or COMPACT_W)
+  compactContent:SetWidth(w)
+  for _, row in ipairs(compactPool) do row:SetWidth(w - 4); row.fs:SetWidth(w - 4) end
+end
+local csizing = false
+cgrip:SetScript("OnMouseDown", function()
+  if Krom_QuestHoardDB and Krom_QuestHoardDB.locked then return end
+  local l, t = compact:GetLeft(), compact:GetTop()
+  if l and t then compact:ClearAllPoints(); compact:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t) end
+  csizing = true
+  compact:StartSizing("RIGHT")
+end)
+cgrip:SetScript("OnMouseUp", function()
+  if not csizing then return end
+  compact:StopMovingOrSizing()
+  csizing = false
+  Krom_QuestHoardDB.cwidth = math.floor(compact:GetWidth() + 0.5)
+  local p, _, rp, x, y = compact:GetPoint()
+  Krom_QuestHoardDB.cpos = { p, rp, x, y }
+  if refresh then refresh() end
+end)
+compact:SetScript("OnSizeChanged", fitCompactWidths)
+-- Reveal the grip while hovering anywhere on the list.
+compact:SetScript("OnUpdate", function(self, elapsed)
+  self.t = (self.t or 0) + elapsed
+  if self.t < 0.1 then return end
+  self.t = 0
+  cgrip:SetAlpha((self:IsMouseOver() or csizing) and 1 or 0)
+end)
 
 local function isCompact() return opt("compact", false) end
 local function activeFrame() return isCompact() and compact or frame end
@@ -1024,19 +1076,20 @@ function render()
     scroll:SetPoint("TOPLEFT", 4, top)
   end
   local i, y = 0, -2
-  local function add(text, gap, iid, collapseKey)
-    if gap then y = y - (compactMode and 2 or 4) end
+  local function add(text, gap, iid, collapseKey, note)
+    if gap then y = y - (compactMode and 8 or 4) end
     i = i + 1
     local row = pool.get(i)
     row:ClearAllPoints()
-    row:SetPoint("TOPLEFT", compactMode and 0 or 8, y)
+    row:SetPoint("TOPLEFT", (compactMode and not collapseKey and iid) and 10 or (compactMode and 0 or 8), y)
+    row.note = note
     row.fs:SetText(text)
     if C.text == DARK_INK.text then row.fs:SetTextColor(0.13, 0.09, 0.04) else row.fs:SetTextColor(1, 1, 1) end
     row.iid, row.collapseKey = iid, collapseKey
     row:Show()
     local h = math.max(12, (row.fs:GetStringHeight() or 14))
     row:SetHeight(h)
-    y = y - h - 3 -- a little air between lines
+    y = y - h - (compactMode and 4 or 3) -- a little air between lines
   end
   local function section(key, title, rows, fmt)
     local shown = {}
@@ -1051,9 +1104,10 @@ function render()
         add(("   " .. C.muted .. "...and %d more|r"):format(#shown - MAX_PER_SECTION))
         break
       end
-      local text = "   " .. fmt(r)
+      local body, note = fmt(r)
+      local text = (compactMode and "" or "   ") .. body
       if isHidden(r.iid) then text = text .. "  " .. C.hidden .. "(hidden)|r" end
-      add(text, false, r.iid)
+      add(text, false, r.iid, nil, note)
     end
   end
 
@@ -1061,6 +1115,9 @@ function render()
   local showLog = compactMode and opt("compactLog", false) or (not compactMode and opt("showLog", true))
   section("log", "In your quest log", showLog and activeItems or {}, function(e)
     local c = e.done and C.good or C.text
+    if compactMode then
+      return ("%s%s %s%d/%d|r"):format(profIcon(e.q), e.name, c, e.have, e.need), "For: " .. e.quest
+    end
     return ("%s%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(profIcon(e.q), e.name, c, e.have, e.need, e.quest)
   end)
 
@@ -1068,9 +1125,12 @@ function render()
   section("keep", compactMode and "Keep for later" or "Keep for later (in your bags)", keepList, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
+    if compactMode then
+      return ("%s%s %s"):format(profIcon(q), e.name, haveNeed(owned(e.iid), need)), questNote(q, need)
+    end
     local where = (q[Q_LEVEL] or 0) > 0 and ("%s lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
-    return ("%s%s %s  " .. C.muted .. "%s%s%s|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
-      need > 0 and (" x" .. need) or "", compactMode and "" or (" (" .. where .. ")"))
+    return ("%s%s %s  " .. C.muted .. "%s%s (%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+      need > 0 and (" x" .. need) or "", where)
   end)
 
   -- 3. Drops in this zone for quests you haven't picked up yet
@@ -1095,8 +1155,11 @@ function render()
   section("watch", picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
-    return ("%s%s %s  " .. C.muted .. "%s%s%s|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
-      need > 0 and (" x" .. need) or "", compactMode and "" or (" (lvl " .. q[Q_LEVEL] .. ")"))
+    if compactMode then
+      return ("%s%s %s"):format(profIcon(q), e.name, haveNeed(owned(e.iid), need)), questNote(q, need)
+    end
+    return ("%s%s %s  " .. C.muted .. "%s%s (lvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+      need > 0 and (" x" .. need) or "", q[Q_LEVEL])
   end)
   if picked and #watch == 0 and not compactMode then
     add((C.header .. "Watch for in %s|r"):format(picked), i > 0)
@@ -1121,7 +1184,7 @@ function render()
   if compactMode then
     compactTitleText:SetText(C.header .. "Krom QuestHoard|r")
     compactContent:SetHeight(-y + 2)
-    compact:SetHeight(18 + (-y) + 4)
+    if not csizing then compact:SetHeight(18 + (-y) + 6) end
     return
   end
   local contentH = -y + 4
@@ -1241,6 +1304,10 @@ setCompactFn = setCompact
 
 local function resetPosition()
   Krom_QuestHoardDB.pos, Krom_QuestHoardDB.height, Krom_QuestHoardDB.width = nil, nil, nil
+  Krom_QuestHoardDB.cpos, Krom_QuestHoardDB.cwidth = nil, nil
+  compact:ClearAllPoints()
+  compact:SetPoint("RIGHT", UIParent, "RIGHT", -60, 120)
+  compact:SetWidth(COMPACT_W)
   frame:ClearAllPoints()
   frame:SetPoint("RIGHT", UIParent, "RIGHT", -260, 80)
   frame:SetWidth(340)
@@ -1485,6 +1552,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     if not ok then say("|cffff5555options panel error:|r " .. tostring(err)) end
     ok, err = pcall(buildMinimapButton)
     if not ok then say("|cffff5555minimap button error:|r " .. tostring(err)) end
+    if Krom_QuestHoardDB.cwidth then compact:SetWidth(Krom_QuestHoardDB.cwidth) end
     local cp = Krom_QuestHoardDB.cpos
     if cp then compact:ClearAllPoints(); compact:SetPoint(cp[1], UIParent, cp[2], cp[3], cp[4]) end
     if Krom_QuestHoardDB.shown then activeFrame():Show() end
