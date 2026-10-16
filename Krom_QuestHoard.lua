@@ -20,7 +20,31 @@ local function opt(key, default)
 end
 
 -- Data row layout: ns.items[itemID] = { name, { {questID, questName, level, zone, raceMask, classMask, requiredLevel, skillID, countNeeded}, ... }, soldByVendor }
-local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL, Q_NEED = 1, 2, 3, 4, 5, 6, 7, 8, 9
+local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL, Q_NEED, Q_PROF = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+
+-- Profession quests get a little icon. Keyed by profession skill ID.
+local PROFESSIONS = {
+  [171] = { "Alchemy", "Trade_Alchemy" },
+  [164] = { "Blacksmithing", "Trade_BlackSmithing" },
+  [185] = { "Cooking", "INV_Misc_Food_15" },
+  [333] = { "Enchanting", "Trade_Engraving" },
+  [202] = { "Engineering", "Trade_Engineering" },
+  [129] = { "First Aid", "Spell_Holy_SealOfSacrifice" },
+  [356] = { "Fishing", "Trade_Fishing" },
+  [182] = { "Herbalism", "Spell_Nature_NatureTouchGrow" },
+  [165] = { "Leatherworking", "INV_Misc_ArmorKit_17" },
+  [186] = { "Mining", "Trade_Mining" },
+  [393] = { "Skinning", "INV_Misc_Pelt_Wolf_01" },
+  [197] = { "Tailoring", "Trade_Tailoring" },
+}
+local function profIcon(q)
+  local p = q and PROFESSIONS[q[Q_PROF] or 0]
+  return p and ("|TInterface\\Icons\\%s:12:12|t "):format(p[2]) or ""
+end
+local function profName(q)
+  local p = q and PROFESSIONS[q[Q_PROF] or 0]
+  return p and p[1]
+end
 
 -- ---------------------------------------------------------------------------
 -- API shims (Classic Era uses older globals, modern clients use C_ namespaces)
@@ -33,6 +57,21 @@ local function itemInfo(id)
 end
 
 local function isBound(bindType) return bindType == 1 or bindType == 4 end
+
+-- How many you own: bags plus bank (the bank part needs the client to know your
+-- bank, which it does after you've opened it at least once).
+local CountItem = (C_Item and C_Item.GetItemCount) or GetItemCount
+local function owned(itemID)
+  if not CountItem then return 0 end
+  local ok, n = pcall(CountItem, itemID, true)
+  return ok and tonumber(n) or 0
+end
+
+-- "x3" colored by progress toward the quest's need.
+local function haveText(have, need)
+  local c = have == 0 and "|cff999999" or (need > 0 and have >= need) and "|cff55ff55" or "|cffffffff"
+  return ("%sx%d|r"):format(c, have)
+end
 
 -- The rule: we only care about items that aren't soulbound AND that a vendor
 -- will buy. If a vendor won't take it, you can't vendor it by accident.
@@ -388,13 +427,14 @@ end)
 -- Scrollable content area (mouse wheel), with a resize grip in the corner.
 local AUTO_MAX_HEIGHT = 480
 local scroll = CreateFrame("ScrollFrame", nil, frame)
-scroll:SetPoint("BOTTOMRIGHT", -6, 8)
+scroll:SetPoint("BOTTOMRIGHT", -6, 20)
+if scroll.SetClipsChildren then scroll:SetClipsChildren(true) end
 local content = CreateFrame("Frame", nil, scroll)
 content:SetSize(330, 1)
 scroll:SetScrollChild(content)
 
 local moreHint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-moreHint:SetPoint("BOTTOMRIGHT", -22, 4)
+moreHint:SetPoint("BOTTOMLEFT", 12, 6)
 moreHint:SetText("scroll for more")
 moreHint:Hide()
 
@@ -585,11 +625,10 @@ function render()
   -- 2. In your bags, still needed by a quest you haven't done
   section("Keep for later (in your bags)", keepList, function(e)
     local q = e.quest
-    local where = (q[Q_LEVEL] or 0) > 0 and (" - %s, lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
     local need = q[Q_NEED] or 0
-    local have = need > 0 and ("%s%d/%d|r"):format(e.count >= need and "|cff55ff55" or "|cffffffff", e.count, need)
-                          or ("x%d"):format(e.count)
-    return ("%s %s  |cff999999%s%s|r"):format(e.name, have, q[Q_NAME], where)
+    local needs = need > 0 and ("needs %d, "):format(need) or ""
+    local where = (q[Q_LEVEL] or 0) > 0 and ("%s, lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
+    return ("%s%s %s  |cff999999%s (%s%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME], needs, where)
   end)
 
   -- 3. Drops in this zone for quests you haven't picked up yet
@@ -600,20 +639,22 @@ function render()
   for z in pairs(zones) do
     for _, pair in ipairs(zoneIndex[z] or {}) do
       local iid, q = pair[1], pair[2]
-      if not seen[iid] and not lastBags[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
-         and (q[Q_SKILL] or 0) == 0 and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3)
+      if not seen[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
+         and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3)
          and questState(q[Q_ID]) == "todo" then
         if sellable(iid) then
           seen[iid] = true
-          watch[#watch + 1] = { name = ns.items[iid][1], quest = q }
+          watch[#watch + 1] = { iid = iid, name = ns.items[iid][1], quest = q }
         end
       end
     end
   end
   table.sort(watch, function(a, b) return a.quest[Q_LEVEL] < b.quest[Q_LEVEL] end)
   section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
-    local need = (e.quest[Q_NEED] or 0) > 0 and ("x%d  "):format(e.quest[Q_NEED]) or ""
-    return ("%s %s|cff999999%s (lvl %d)|r"):format(e.name, need, e.quest[Q_NAME], e.quest[Q_LEVEL])
+    local q = e.quest
+    local need = q[Q_NEED] or 0
+    local needs = need > 0 and ("needs %d, "):format(need) or ""
+    return ("%s%s %s  |cff999999%s (%slvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME], needs, q[Q_LEVEL])
   end)
   if picked and #watch == 0 then
     add(("|cffffd100Watch for in %s|r"):format(picked), i > 0)
@@ -638,7 +679,7 @@ function render()
   local contentH = -y + 4
   content:SetHeight(contentH)
   local saved = Krom_QuestHoardDB and Krom_QuestHoardDB.height
-  frame:SetHeight(saved or math.min(-top + contentH + 12, AUTO_MAX_HEIGHT))
+  frame:SetHeight(saved or math.min(-top + contentH + 24, AUTO_MAX_HEIGHT))
   clampScroll()
 end
 
@@ -666,7 +707,7 @@ local function tagTooltip(tt)
       tt:AddLine(("|cffffb000QuestHoard: KEEP|r %s%s"):format(q[Q_NAME], p and (" " .. p.have .. "/" .. p.need) or ""))
     else
       local where = (q[Q_LEVEL] or 0) > 0 and (" (%s, lvl %d)"):format(q[Q_ZONE], q[Q_LEVEL]) or ""
-      local prof = (q[Q_SKILL] or 0) > 0 and " |cff999999[profession]|r" or ""
+      local prof = profName(q) and (" " .. profIcon(q) .. "|cff999999" .. profName(q) .. "|r") or ""
       local need = (q[Q_NEED] or 0) > 0 and (q[Q_NEED] .. " ") or ""
       tt:AddLine(("|cffffb000QuestHoard: KEEP|r %sfor %s%s%s"):format(need, q[Q_NAME], where, prof))
     end

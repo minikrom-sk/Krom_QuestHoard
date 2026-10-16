@@ -28,6 +28,22 @@ for m in re.finditer(r'\[(\d+)\]="((?:[^"\\]|\\.)*)"', open(ZONES_LUA, encoding=
 def lst(t):
     return [t[i] for i in range(1, len(t) + 1)] if t is not None else []
 
+PROF_SKILLS = {171, 164, 185, 333, 202, 129, 356, 182, 165, 186, 393, 197}
+# Forever's new profession quests often lack a skill requirement in the data, so
+# also look for the profession's trainer-type word in the quest text. Heuristic.
+PROF_WORDS = [(171, r"\balchemist"), (164, r"\bblacksmith"), (333, r"\benchanter"), (202, r"\bengineer"),
+              (165, r"\bleatherworker"), (197, r"\btailor"), (182, r"\bherbalist"), (186, r"\bminer\b"),
+              (356, r"\bfisherman\b"), (393, r"\bskinner\b"), (129, r"\bfirst aid\b"), (185, r"\bcooking\b")]
+
+def profession(skill, name, text):
+    if skill in PROF_SKILLS:
+        return skill
+    hay = (name + " " + text).lower()
+    for sid, pat in PROF_WORDS:
+        if re.search(pat, hay):
+            return sid
+    return 0
+
 WORDNUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
            "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15, "twenty": 20}
 
@@ -75,7 +91,8 @@ for qid, q in quests.items():
         e = out.setdefault(iid, {"name": it[1], "quests": [], "vendor": it[14] is not None and len(it[14]) > 0})
         text = " ".join(t for t in lst(q[8]) if t) if q[8] is not None else ""
         need = count_in_text(text, it[1]) or 0
-        e["quests"].append((int(qid), q[1], int(q[5] or 0), zname, races, classes, req_level, skill, need))
+        prof = profession(skill, q[1], text)
+        e["quests"].append((int(qid), q[1], int(q[5] or 0), zname, races, classes, req_level, skill, need, prof))
 
 def s(x):
     return '"' + x.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -83,18 +100,19 @@ def s(x):
 lines = [
     "-- AUTO-GENERATED from QuestieDB's Forever data (thanks, Questie team).",
     "-- Do not hand-edit: regenerate with the extractor instead.",
-    "-- [itemID] = { name, { {questID, questName, questLevel, zone, raceMask, classMask, requiredLevel, skillID, countNeeded}, ... }, soldByVendor }",
+    "-- [itemID] = { name, { {questID, questName, questLevel, zone, raceMask, classMask, requiredLevel, skillID, countNeeded, professionSkillID}, ... }, soldByVendor }",
     "local _, ns = ...",
     "ns.items = {",
 ]
 for iid in sorted(out):
     e = out[iid]
-    qs = ", ".join("{%d,%s,%d,%s,%d,%d,%d,%d,%d}" % (a, s(b), c, s(d), r, k, rl, sk, n) for a, b, c, d, r, k, rl, sk, n in sorted(e["quests"], key=lambda t: (t[2], t[0])))
+    qs = ", ".join("{%d,%s,%d,%s,%d,%d,%d,%d,%d,%d}" % (a, s(b), c, s(d), r, k, rl, sk, n, pf) for a, b, c, d, r, k, rl, sk, n, pf in sorted(e["quests"], key=lambda t: (t[2], t[0])))
     lines.append("[%d]={%s,{%s}%s}," % (iid, s(e["name"]), qs, ",true" if e["vendor"] else ""))
 lines.append("}")
 open(OUT, "w", encoding="utf-8").write("\n".join(lines) + "\n")
 
 links=[q for e in out.values() for q in e["quests"]]
+print(f"profession-tagged links: {sum(1 for q in links if q[9])}")
 print(f"counts found for {sum(1 for q in links if q[8])} of {len(links)} quest links")
 print(f"vendor-sold: {sum(1 for e in out.values() if e['vendor'])}")
 print(f"kept {len(out)} tradeable items across {sum(len(e['quests']) for e in out.values())} quest links; skipped {skipped} mount links")
