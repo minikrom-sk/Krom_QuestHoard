@@ -736,12 +736,39 @@ local function showInQuestLog(row)
   end
   local questFrame = QuestLogExFrame or ClassicQuestLog or QuestLogFrame
   if not questFrame then
+    -- Modern quest log lives in the world map. Try the direct call, then check
+    -- that the map really opened; if not, open the map ourselves and select it.
+    local tried = {}
+    local function mapOpen() return WorldMapFrame and WorldMapFrame:IsShown() end
     if QuestMapFrame_OpenToQuestDetails then
+      tried[#tried + 1] = "OpenToQuestDetails"
       local ok, err = pcall(QuestMapFrame_OpenToQuestDetails, qid)
-      if not ok then say("couldn't open the quest log: " .. tostring(err)) end
-    else
-      say("couldn't find a quest log to open on this client.")
+      if not ok then tried[#tried] = "OpenToQuestDetails (error: " .. tostring(err) .. ")" end
     end
+    C_Timer.After(0.15, function()
+      if mapOpen() then return end
+      if C_QuestLog and C_QuestLog.SetSelectedQuest then pcall(C_QuestLog.SetSelectedQuest, qid) end
+      if OpenWorldMap then
+        tried[#tried + 1] = "OpenWorldMap"; pcall(OpenWorldMap)
+      elseif ToggleWorldMap then
+        tried[#tried + 1] = "ToggleWorldMap"; pcall(ToggleWorldMap)
+      elseif WorldMapFrame then
+        tried[#tried + 1] = "ShowUIPanel(WorldMapFrame)"; pcall(ShowUIPanel, WorldMapFrame)
+      end
+      if QuestMapFrame_ShowQuestDetails then
+        tried[#tried + 1] = "ShowQuestDetails"; pcall(QuestMapFrame_ShowQuestDetails, qid)
+      end
+      C_Timer.After(0.15, function()
+        if not mapOpen() and ToggleQuestLog then
+          tried[#tried + 1] = "ToggleQuestLog"; pcall(ToggleQuestLog)
+        end
+        C_Timer.After(0.15, function()
+          if not mapOpen() then
+            say("couldn't open the quest log. Tried: " .. table.concat(tried, ", ") .. ". Please screenshot this for Krom.")
+          end
+        end)
+      end)
+    end)
     return
   end
   local idx = GetQuestLogIndexByID and GetQuestLogIndexByID(qid)
@@ -1321,7 +1348,7 @@ function render()
   if wantActive then
     for _, e in ipairs(activeItems) do
       local key = e.iid or e.name
-      if not seen[key] and passesFilter(e.q) then
+      if not seen[key] then -- quest-log items ignore the Normal/Profession filters, like the full window
         seen[key] = true
         watch[#watch + 1] = { iid = e.iid, name = e.name, quest = e.q, active = true,
                               have = e.have, need = e.need, finished = e.done }
@@ -1916,6 +1943,12 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
     say(("quest log frames: QuestLogFrame %s, ClassicQuestLog %s, QuestLogExFrame %s, QuestMapFrame_OpenToQuestDetails %s, C_QuestLog.GetLogIndexForQuestID %s"):format(
       yn(QuestLogFrame), yn(ClassicQuestLog), yn(QuestLogExFrame), yn(QuestMapFrame_OpenToQuestDetails),
       yn(C_QuestLog and C_QuestLog.GetLogIndexForQuestID)))
+    say(("filters: normal %s, profession %s, hidden %s, done %s, high level %s"):format(
+      tostring(opt("showNormal", true)), tostring(opt("showProf", true)), tostring(opt("showHidden", false)),
+      tostring(opt("showDone", false)), tostring(opt("showHigh", false))))
+    say(("map functions: WorldMapFrame %s, OpenWorldMap %s, ToggleWorldMap %s, ShowQuestDetails %s, ToggleQuestLog %s, gamepad UI %s"):format(
+      yn(WorldMapFrame), yn(OpenWorldMap), yn(ToggleWorldMap), yn(QuestMapFrame_ShowQuestDetails), yn(ToggleQuestLog),
+      yn(InputUtil and InputUtil.IsGamepadUIEnabled and InputUtil.IsGamepadUIEnabled())))
     local n = 0
     for _ in pairs(active) do n = n + 1 end
     say(("quests in log: %d, quest-log items tracked: %d"):format(n, #activeItems))
