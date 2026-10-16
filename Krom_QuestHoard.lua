@@ -29,6 +29,19 @@ local function isHidden(iid)
 end
 local function hiddenFiltered(iid) return isHidden(iid) and not opt("showHidden", false) end
 
+-- Can the client load this texture? (Some textures differ between Classic and Forever.)
+local function textureExists(path)
+  if not GetFileIDFromPath then return true end -- can't check: assume yes
+  local ok, id = pcall(GetFileIDFromPath, path)
+  return ok and id ~= nil
+end
+
+-- Text colors for the window. Light window styles (parchment, paper) swap in
+-- dark ink so the text stays readable; see applyStyle().
+local C = { header = "|cffffd100", muted = "|cff999999", text = "|cffffffff", good = "|cff55ff55", hidden = "|cff777777" }
+local DARK_INK  = { header = "|cff7a1f0a", muted = "|cff5c4a32", text = "|cff22160a", good = "|cff1f6e12", hidden = "|cff8c7b63" }
+local LIGHT_INK = { header = "|cffffd100", muted = "|cff999999", text = "|cffffffff", good = "|cff55ff55", hidden = "|cff777777" }
+
 -- Data row layout: ns.items[itemID] = { name, { {questID, questName, level, zone, raceMask, classMask, requiredLevel, skillID, countNeeded}, ... }, soldByVendor }
 local Q_ID, Q_NAME, Q_LEVEL, Q_ZONE, Q_RACES, Q_CLASSES, Q_REQLEVEL, Q_SKILL, Q_NEED, Q_PROF = 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 
@@ -98,7 +111,7 @@ end
 
 -- "x3" colored by progress toward the quest's need.
 local function haveText(have, need)
-  local c = have == 0 and "|cff999999" or (need > 0 and have >= need) and "|cff55ff55" or "|cffffffff"
+  local c = have == 0 and C.muted or (need > 0 and have >= need) and C.good or C.text
   return ("%sx%d|r"):format(c, have)
 end
 
@@ -429,9 +442,7 @@ frame:SetBackdrop({
   insets = { left = 4, right = 4, top = 4, bottom = 4 },
 })
 frame:SetBackdropColor(0, 0, 0, 0.8)
-local function applyAlpha()
-  frame:SetBackdropColor(0.05, 0.05, 0.07, opt("bgAlpha", 0.8))
-end
+
 frame:SetClampedToScreen(true)
 frame:SetMovable(true)
 frame:EnableMouse(true)
@@ -592,7 +603,7 @@ local function filterCheck(label, key, x, default)
     Krom_QuestHoardDB[key] = self:GetChecked() and true or false
     if refresh then refresh() end
   end)
-  cb.key, cb.x, cb.default = key, x, default
+  cb.key, cb.x, cb.default, cb.label = key, x, default, txt
   filterChecks[#filterChecks + 1] = cb
   return cb
 end
@@ -741,6 +752,72 @@ zoneBtn:SetScript("OnClick", function()
 end)
 
 
+-- ---------------------------------------------------------------------------
+-- Window styles
+-- ---------------------------------------------------------------------------
+local BORDER = "Interface\\Tooltips\\UI-Tooltip-Border"
+local STYLES = {
+  { key = "dark",       name = "Dark",           bg = "Interface\\Buttons\\WHITE8x8", tint = { 0.05, 0.05, 0.07 } },
+  { key = "dialog",     name = "Dialog",         bg = "Interface\\DialogFrame\\UI-DialogBox-Background", tile = 32 },
+  { key = "marble",     name = "Marble",         bg = "Interface\\FrameGeneral\\UI-Background-Marble", tile = 256 },
+  { key = "rock",       name = "Rock",           bg = "Interface\\FrameGeneral\\UI-Background-Rock", tile = 256 },
+  { key = "parchment",  name = "Parchment",      bg = "Interface\\QuestFrame\\QuestBG", light = true, border = { 0.55, 0.4, 0.2 } },
+  { key = "stationery", name = "Letter paper",   bg = "Interface\\Stationery\\StationeryTest1", light = true, border = { 0.55, 0.4, 0.2 } },
+}
+local function availableStyles()
+  local out = {}
+  for _, st in ipairs(STYLES) do
+    if st.key == "dark" or textureExists(st.bg) then out[#out + 1] = st end
+  end
+  return out
+end
+local function currentStyle()
+  local want = opt("style", "dark")
+  for _, st in ipairs(availableStyles()) do if st.key == want then return st end end
+  return STYLES[1]
+end
+
+local function applyAlpha()
+  local st = currentStyle()
+  local t = st.tint or { 1, 1, 1 }
+  frame:SetBackdropColor(t[1], t[2], t[3], opt("bgAlpha", st.light and 1 or 0.8))
+end
+
+local function applyStyle()
+  local st = currentStyle()
+  frame:SetBackdrop({
+    bgFile = st.bg,
+    edgeFile = BORDER,
+    tile = st.tile ~= nil, tileSize = st.tile or 16, edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
+  })
+  local b = st.border or { 1, 1, 1 }
+  frame:SetBackdropBorderColor(b[1], b[2], b[3], 1)
+  applyAlpha()
+  local ink = st.light and DARK_INK or LIGHT_INK
+  for k, v in pairs(ink) do C[k] = v end
+  if st.light then
+    header:SetTextColor(0.45, 0.12, 0.04)
+    for _, cb in ipairs(filterChecks) do cb.label:SetTextColor(0.13, 0.09, 0.04) end
+    moreHint:SetTextColor(0.36, 0.29, 0.2)
+  else
+    header:SetTextColor(1, 0.82, 0)
+    for _, cb in ipairs(filterChecks) do cb.label:SetTextColor(1, 1, 1) end
+    moreHint:SetTextColor(0.5, 0.5, 0.5)
+  end
+  if refresh then refresh() end
+end
+
+local function cycleStyle()
+  local list, cur = availableStyles(), currentStyle()
+  local idx = 1
+  for n, st in ipairs(list) do if st.key == cur.key then idx = n end end
+  local nxt = list[idx % #list + 1]
+  Krom_QuestHoardDB.style = nxt.key
+  applyStyle()
+  return nxt
+end
+
 function render()
   local watching = opt("showWatch", true)
   local picked = watching and Krom_QuestHoardDB and Krom_QuestHoardDB.watchZone or nil
@@ -763,6 +840,7 @@ function render()
     row:ClearAllPoints()
     row:SetPoint("TOPLEFT", 8, y)
     row.fs:SetText(text)
+    if C.text == DARK_INK.text then row.fs:SetTextColor(0.13, 0.09, 0.04) else row.fs:SetTextColor(1, 1, 1) end
     row.iid = iid
     row:Show()
     local h = math.max(14, (row.fs:GetStringHeight() or 14))
@@ -773,22 +851,22 @@ function render()
     local shown = {}
     for _, r in ipairs(rows) do if not hiddenFiltered(r.iid) then shown[#shown + 1] = r end end
     if #shown == 0 then return end
-    add("|cffffd100" .. title .. "|r", i > 0)
+    add(C.header .. title .. "|r", i > 0)
     for n, r in ipairs(shown) do
       if n > MAX_PER_SECTION then
-        add(("   |cff999999...and %d more|r"):format(#shown - MAX_PER_SECTION))
+        add(("   " .. C.muted .. "...and %d more|r"):format(#shown - MAX_PER_SECTION))
         break
       end
       local text = "   " .. fmt(r)
-      if isHidden(r.iid) then text = text .. "  |cff777777(hidden)|r" end
+      if isHidden(r.iid) then text = text .. "  " .. C.hidden .. "(hidden)|r" end
       add(text, false, r.iid)
     end
   end
 
   -- 1. Items your active quests want
   section("In your quest log", activeItems, function(e)
-    local c = e.done and "|cff55ff55" or "|cffffffff"
-    return ("%s  %s%d/%d|r  |cff999999%s|r"):format(e.name, c, e.have, e.need, e.quest)
+    local c = e.done and C.good or C.text
+    return ("%s  %s%d/%d|r  " .. C.muted .. "%s|r"):format(e.name, c, e.have, e.need, e.quest)
   end)
 
   -- 2. In your bags, still needed by a quest you haven't done
@@ -796,7 +874,7 @@ function render()
     local q = e.quest
     local need = q[Q_NEED] or 0
     local where = (q[Q_LEVEL] or 0) > 0 and ("%s lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
-    return ("%s%s %s  |cff999999%s%s (%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+    return ("%s%s %s  " .. C.muted .. "%s%s (%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
       need > 0 and (" x" .. need) or "", where)
   end)
 
@@ -822,26 +900,26 @@ function render()
   section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
-    return ("%s%s %s  |cff999999%s%s (lvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+    return ("%s%s %s  " .. C.muted .. "%s%s (lvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
       need > 0 and (" x" .. need) or "", q[Q_LEVEL])
   end)
   if picked and #watch == 0 then
-    add(("|cffffd100Watch for in %s|r"):format(picked), i > 0)
-    add("   |cff999999Nothing sellable to keep for quests there.|r")
+    add((C.header .. "Watch for in %s|r"):format(picked), i > 0)
+    add("   " .. C.muted .. "Nothing sellable to keep for quests there.|r")
   end
 
   -- 4. Quests done: sell it
   section("Done with - sell", sellList, function(e)
     local kind, ah, sell = verdict(e.iid)
     if kind == "ah" then
-      return ("%s x%d  |cff55ff55AH ~%s|r"):format(e.name, e.count, money(ah))
+      return ("%s x%d  " .. C.good .. "AH ~%s|r"):format(e.name, e.count, money(ah))
     end
-    if sell <= 0 then return ("%s x%d  |cff999999no vendor value|r"):format(e.name, e.count) end
+    if sell <= 0 then return ("%s x%d  " .. C.muted .. "no vendor value|r"):format(e.name, e.count) end
     return ("%s x%d  vendor %s"):format(e.name, e.count, money(sell * e.count))
   end)
 
   if i == 0 then
-    add("|cff999999Nothing to hoard right now.\nGo loot something worth keeping.|r")
+    add(C.muted .. "Nothing to hoard right now.\nGo loot something worth keeping.|r")
     y = y - 14
   end
   for j = i + 1, #lines do lines[j]:Hide() end
@@ -936,7 +1014,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Window toggle, settings panel, minimap button
 -- ---------------------------------------------------------------------------
-local ICON = "Interface\\Icons\\INV_Misc_Bag_10"
+-- Goblin head where the client has it (Forever / modern clients); Classic Era
+-- may not ship that icon, so it falls back to the loot bag there.
+local GOBLIN_ICON = "Interface\\Icons\\Achievement_GoblinHead"
+local ICON = textureExists(GOBLIN_ICON) and GOBLIN_ICON or "Interface\\Icons\\INV_Misc_Bag_10"
 
 local function version()
   local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
@@ -1032,6 +1113,13 @@ local function buildOptions()
   end)
   y = y - 48
 
+  local styleBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+  styleBtn:SetSize(240, 24)
+  styleBtn:SetPoint("TOPLEFT", 20, y)
+  local function styleLabel() styleBtn:SetText("Window style: " .. currentStyle().name .. "  (click to change)") end
+  styleBtn:SetScript("OnClick", function() cycleStyle(); styleLabel() end)
+  y = y - 34
+
   local reset = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   reset:SetSize(180, 24)
   reset:SetPoint("TOPLEFT", 20, y - 8)
@@ -1041,13 +1129,14 @@ local function buildOptions()
   local help = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
   help:SetPoint("TOPLEFT", 20, y - 48)
   help:SetJustifyH("LEFT")
-  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh opacity 0-100, /qh learned\n" ..
+  help:SetText("Commands: /qh (toggle window), /qh options, /qh lock, /qh reset, /qh style, /qh opacity 0-100, /qh learned\n" ..
                "Minimap button: left-click toggles the window, right-click opens these options.\n" ..
                "Right-click an item in the window to hide it; tick 'Hidden items' to see or unhide them.")
 
   panel:SetScript("OnShow", function()
     for _, cb in ipairs(checks) do cb:SetChecked(cb.get()) end
-    sl:SetValue(opt("bgAlpha", 0.8))
+    sl:SetValue(opt("bgAlpha", currentStyle().light and 1 or 0.8))
+    styleLabel()
   end)
 
   if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
@@ -1113,7 +1202,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     local p = db.pos
     if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
     if db.width then frame:SetWidth(db.width) end
-    applyAlpha()
+    applyStyle()
     buildIndexes()
   elseif event == "PLAYER_LOGIN" then
     setPlayerBits()
@@ -1142,6 +1231,18 @@ SlashCmdList.KROMQUESTHOARD = function(msg)
   elseif msg == "reset" or msg == "fit" then
     resetPosition()
     say("window size and position reset.")
+  elseif msg:match("^style") then
+    local want = msg:match("^style%s+(%S+)")
+    if want then
+      local found
+      for _, st in ipairs(availableStyles()) do
+        if st.key == want or st.name:lower():find(want, 1, true) then found = st end
+      end
+      if found then Krom_QuestHoardDB.style = found.key; applyStyle(); say("window style: " .. found.name .. ".")
+      else say("unknown style. Try: /qh style (cycles through them).") end
+    else
+      say("window style: " .. cycleStyle().name .. ". /qh style again for the next one.")
+    end
   elseif msg:match("^opacity") then
     local n = tonumber(msg:match("(%d+)"))
     if n then

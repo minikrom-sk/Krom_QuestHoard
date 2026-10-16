@@ -5,7 +5,7 @@
 ## Version: @project-version@
 ## SavedVariables: Krom_QuestHoardDB
 ## OptionalDeps: Auctionator
-## IconTexture: Interface\Icons\INV_Misc_Bag_10
+## IconTexture: Interface\Icons\Achievement_GoblinHead
 
 Libs\LibStub\LibStub.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
