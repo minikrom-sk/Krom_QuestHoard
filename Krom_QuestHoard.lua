@@ -12,6 +12,9 @@ ns.items = ns.items or {}
 local PREFIX = "|cffffb000Krom QuestHoard:|r "
 local function say(msg) print(PREFIX .. msg) end
 
+-- Defined further down; declared here so UI handlers above them can call them.
+local render, refresh
+
 -- Settings live in Krom_QuestHoardDB; these read them with defaults.
 local function opt(key, default)
   local db = Krom_QuestHoardDB
@@ -44,6 +47,13 @@ end
 local function profName(q)
   local p = q and PROFESSIONS[q[Q_PROF] or 0]
   return p and p[1]
+end
+
+-- Window filter: show/hide normal quests and profession quests.
+local function isProfQuest(q) return PROFESSIONS[q[Q_PROF] or 0] ~= nil end
+local function passesFilter(q)
+  if isProfQuest(q) then return opt("showProf", true) end
+  return opt("showNormal", true)
 end
 
 -- ---------------------------------------------------------------------------
@@ -350,7 +360,7 @@ local function scanBags()
         -- Items for quests in your log already show in the quest-log section;
         -- this list is for the ones you're holding for LATER quests.
         local later
-        for _, q in ipairs(open) do if not active[q[Q_ID]] then later = q; break end end
+        for _, q in ipairs(open) do if not active[q[Q_ID]] and passesFilter(q) then later = q; break end end
         if later then
           keepList[#keepList + 1] = { iid = iid, name = display, count = count, quest = later }
           local old = lastBags[iid] or 0
@@ -449,9 +459,9 @@ scroll:SetScript("OnMouseWheel", function(_, delta) clampScroll((scroll:GetVerti
 
 frame:SetResizable(true)
 if frame.SetResizeBounds then
-  frame:SetResizeBounds(340, 90, 340, 1000)
+  frame:SetResizeBounds(300, 110, 800, 1000)
 elseif frame.SetMinResize then
-  frame:SetMinResize(340, 90); frame:SetMaxResize(340, 1000)
+  frame:SetMinResize(300, 110); frame:SetMaxResize(800, 1000)
 end
 local grip = CreateFrame("Button", nil, frame)
 grip:SetSize(16, 16)
@@ -459,28 +469,46 @@ grip:SetPoint("BOTTOMRIGHT", -3, 3)
 grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+local sizing = false
 grip:SetScript("OnMouseDown", function()
-  if not (Krom_QuestHoardDB and Krom_QuestHoardDB.locked) then frame:StartSizing("BOTTOM") end
+  if Krom_QuestHoardDB and Krom_QuestHoardDB.locked then return end
+  -- Pin the top-left corner first, so dragging the corner only moves the
+  -- bottom-right edge instead of stretching around the window's middle.
+  local left, top = frame:GetLeft(), frame:GetTop()
+  if left and top then
+    frame:ClearAllPoints()
+    frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+  end
+  sizing = true
+  frame:StartSizing("BOTTOMRIGHT")
 end)
 grip:SetScript("OnMouseUp", function()
+  if not sizing then return end
   frame:StopMovingOrSizing()
+  sizing = false
   Krom_QuestHoardDB.height = math.floor(frame:GetHeight() + 0.5)
+  Krom_QuestHoardDB.width = math.floor(frame:GetWidth() + 0.5)
   local p, _, rp, x, y = frame:GetPoint()
   Krom_QuestHoardDB.pos = { p, rp, x, y }
   clampScroll()
 end)
 grip:SetScript("OnDoubleClick", function()
-  Krom_QuestHoardDB.height = nil -- back to auto-fit
+  Krom_QuestHoardDB.height = nil -- back to auto-fit (width stays)
   if refresh then refresh() end
 end)
-frame:SetScript("OnSizeChanged", function() clampScroll() end)
-
 local lines = {}
+local function fitWidths()
+  local w = (frame:GetWidth() or 340) - 26
+  content:SetWidth(w)
+  for _, fs in ipairs(lines) do fs:SetWidth(w - 8) end
+end
+frame:SetScript("OnSizeChanged", function() fitWidths(); clampScroll() end)
+
 local function getLine(i)
   if not lines[i] then
     local fs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     fs:SetJustifyH("LEFT")
-    fs:SetWidth(320)
+    fs:SetWidth((frame:GetWidth() or 340) - 34)
     lines[i] = fs
   end
   return lines[i]
@@ -491,10 +519,37 @@ local MAX_PER_SECTION = 25 -- the window scrolls now, so show plenty
 -- ---------------------------------------------------------------------------
 -- Zone picker: watch another zone's drops (e.g. plan Westfall from Northshire)
 -- ---------------------------------------------------------------------------
-local render, refresh -- defined below (forward-declared so the zone picker can call them)
 local zoneBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-zoneBtn:SetSize(320, 20)
+zoneBtn:SetHeight(20)
 zoneBtn:SetPoint("TOPLEFT", 10, -26)
+zoneBtn:SetPoint("TOPRIGHT", -10, -26)
+
+-- Filter row: show/hide normal quests and profession quests in the lists.
+
+local filterChecks = {}
+local function filterCheck(label, key, x)
+  local cb = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+  cb:SetSize(20, 20)
+  local txt = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  txt:SetPoint("LEFT", cb, "RIGHT", 1, 0)
+  txt:SetText(label)
+  cb:SetScript("OnClick", function(self)
+    Krom_QuestHoardDB[key] = self:GetChecked() and true or false
+    if refresh then refresh() end
+  end)
+  cb.key, cb.x = key, x
+  filterChecks[#filterChecks + 1] = cb
+  return cb
+end
+filterCheck("Normal quests", "showNormal", 10)
+filterCheck("|TInterface\\Icons\\INV_Misc_Note_01:12:12|t Profession quests", "showProf", 130)
+local function placeFilters(y)
+  for _, cb in ipairs(filterChecks) do
+    cb:ClearAllPoints()
+    cb:SetPoint("TOPLEFT", cb.x, y)
+    cb:SetChecked(opt(cb.key, true))
+  end
+end
 
 local picker = CreateFrame("Frame", nil, frame, BackdropTemplateMixin and "BackdropTemplate" or nil)
 picker:SetFrameStrata("DIALOG")
@@ -591,7 +646,8 @@ function render()
   else
     zoneBtn:Hide(); picker:Hide()
   end
-  local top = watching and -50 or -28
+  placeFilters(watching and -47 or -25)
+  local top = watching and -68 or -46
   scroll:SetPoint("TOPLEFT", 4, top)
   local i, y = 0, -2
   local function add(text, gap)
@@ -626,9 +682,9 @@ function render()
   section("Keep for later (in your bags)", keepList, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
-    local needs = need > 0 and ("needs %d, "):format(need) or ""
-    local where = (q[Q_LEVEL] or 0) > 0 and ("%s, lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
-    return ("%s%s %s  |cff999999%s (%s%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME], needs, where)
+    local where = (q[Q_LEVEL] or 0) > 0 and ("%s lvl %d"):format(q[Q_ZONE], q[Q_LEVEL]) or q[Q_ZONE]
+    return ("%s%s %s  |cff999999%s%s (%s)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+      need > 0 and (" x" .. need) or "", where)
   end)
 
   -- 3. Drops in this zone for quests you haven't picked up yet
@@ -640,7 +696,7 @@ function render()
     for _, pair in ipairs(zoneIndex[z] or {}) do
       local iid, q = pair[1], pair[2]
       if not seen[iid] and fits(q[Q_RACES], raceBit) and fits(q[Q_CLASSES], classBit)
-         and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3)
+         and (picked or (q[Q_REQLEVEL] or 0) <= myLevel + 3) and passesFilter(q)
          and questState(q[Q_ID]) == "todo" then
         if sellable(iid) then
           seen[iid] = true
@@ -653,8 +709,8 @@ function render()
   section(picked and ("Watch for in " .. picked) or "Watch for (this zone)", watch, function(e)
     local q = e.quest
     local need = q[Q_NEED] or 0
-    local needs = need > 0 and ("needs %d, "):format(need) or ""
-    return ("%s%s %s  |cff999999%s (%slvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME], needs, q[Q_LEVEL])
+    return ("%s%s %s  |cff999999%s%s (lvl %d)|r"):format(profIcon(q), e.name, haveText(owned(e.iid), need), q[Q_NAME],
+      need > 0 and (" x" .. need) or "", q[Q_LEVEL])
   end)
   if picked and #watch == 0 then
     add(("|cffffd100Watch for in %s|r"):format(picked), i > 0)
@@ -679,7 +735,9 @@ function render()
   local contentH = -y + 4
   content:SetHeight(contentH)
   local saved = Krom_QuestHoardDB and Krom_QuestHoardDB.height
-  frame:SetHeight(saved or math.min(-top + contentH + 24, AUTO_MAX_HEIGHT))
+  if not sizing then
+    frame:SetHeight(saved or math.min(-top + contentH + 24, AUTO_MAX_HEIGHT))
+  end
   clampScroll()
 end
 
@@ -908,6 +966,7 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     db.minimap = db.minimap or {}
     local p = db.pos
     if p then frame:ClearAllPoints(); frame:SetPoint(p[1], UIParent, p[2], p[3], p[4]) end
+    if db.width then frame:SetWidth(db.width) end
     buildIndexes()
   elseif event == "PLAYER_LOGIN" then
     setPlayerBits()
